@@ -201,6 +201,20 @@ export class ConstructionManager {
     }
   }
 
+  // SPEC S6: Kalan simülasyon saniyesi okuma fonksiyonu
+  public getRemainingSimSec(building: Building): number {
+    if (building.state !== 'constructing') return 0;
+    const def = BUILDINGS[building.defId];
+    if (!def) return 0;
+    const baseBuildTime = def.buildTimeSec;
+    const effectiveBuildTime = this.modifierRegistry
+      ? this.modifierRegistry.getBuildingStat(building, 'structureBuildTime')
+      : baseBuildTime;
+    if (effectiveBuildTime <= 0) return 0;
+    const remainingFraction = Math.max(0, 1 - building.constructionProgress);
+    return effectiveBuildTime * remainingFraction;
+  }
+
   // Üretim binaları ve savunma yapıları için kart eşleşmesi
   private getCardIdForBuilding(buildingId: BuildingId): CardId | null {
     // 1. Savunma yapıları için kendi kartı

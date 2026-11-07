@@ -315,13 +315,23 @@ body {
   cursor: pointer;
   touch-action: none;
   position: relative;
-  transition: transform 0.1s, border-color 0.15s, opacity 0.2s;
+  transition: border-color 0.15s, box-shadow 0.15s, opacity 0.2s;
   box-sizing: border-box;
+  user-select: none;
+}
+
+/* S1 & S2: Hover'da boyut ve hit alanı değişmez; iç elemanlar tıklamayı engellemez */
+.game-card * {
+  pointer-events: none;
+}
+
+.game-card .game-card-stop-btn {
+  pointer-events: auto;
 }
 
 .game-card:hover {
   border-color: #60a5fa;
-  transform: translateY(-2px);
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.45), 0 4px 14px rgba(0, 0, 0, 0.6);
 }
 
 .game-card.disabled {
@@ -331,8 +341,8 @@ body {
 }
 
 .game-card.disabled:hover {
-  transform: none;
   border-color: #3f3f46;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
 }
 
 .game-card.dragging {
@@ -377,6 +387,13 @@ body {
   color: #93c5fd;
   display: flex;
   justify-content: space-between;
+  align-items: center;
+}
+
+.game-card-remaining {
+  font-size: 10px;
+  color: #fbbf24;
+  font-weight: 600;
 }
 
 .game-card-progress-bar {
@@ -390,6 +407,7 @@ body {
 .game-card-progress-fill {
   height: 100%;
   background: #3b82f6;
+  transition: width 0.1s linear;
 }
 
 .game-card-stop-btn {
@@ -422,16 +440,41 @@ body {
   color: #e5e7eb;
 }
 
+/* S4: Kısa uyarı göstergesi ('Kuyruk dolu', 'Kaynak yetersiz') */
+.game-card-toast {
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  right: 4px;
+  background: rgba(220, 38, 38, 0.95);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.game-card-toast.visible {
+  opacity: 1;
+}
+
 /* İşçi butonları paneli */
 .worker-buttons-panel {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
 }
 
 .worker-btn {
   min-height: 48px;
-  min-width: 110px;
+  min-width: 115px;
   background: #27272a;
   border: 1px solid #52525b;
   border-radius: 8px;
@@ -444,16 +487,27 @@ body {
   justify-content: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   touch-action: manipulation;
-  transition: background 0.15s, opacity 0.2s;
+  transition: background 0.15s, opacity 0.2s, border-color 0.15s;
+  position: relative;
+  user-select: none;
+}
+
+.worker-btn * {
+  pointer-events: none;
 }
 
 .worker-btn:hover {
   background: #3f3f46;
+  border-color: #60a5fa;
 }
 
 .worker-btn.disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.worker-btn.disabled:hover {
+  border-color: #52525b;
 }
 
 .worker-btn-name {
@@ -465,6 +519,30 @@ body {
   font-size: 10px;
   color: #fbbf24;
   margin-top: 1px;
+}
+
+.worker-btn-info {
+  font-size: 9px;
+  color: #93c5fd;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.worker-btn-progress-bar {
+  width: 100%;
+  height: 3px;
+  background: #374151;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.worker-btn-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.1s linear;
 }
 
 /* S5: Minimap */

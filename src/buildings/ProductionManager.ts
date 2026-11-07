@@ -181,6 +181,14 @@ export class ProductionManager {
     return this.queues.get(building.id) || [];
   }
 
+  // SPEC S6: Kalan simülasyon saniyesi okuma fonksiyonu (kuyruğun başındaki birim için)
+  public getRemainingSimSec(building: Building): number {
+    const queue = this.queues.get(building.id);
+    if (!queue || queue.length === 0) return 0;
+    const item = queue[0];
+    return Math.max(0, item.totalSec - item.progressSec);
+  }
+
   // SPEC S6: getQueuedWorkerCount(team, type)
   // Kuyrukta bekleyen (henüz doğmamış) işçi sayısı
   public getQueuedWorkerCount(team: Team, type: UnitId): number {
