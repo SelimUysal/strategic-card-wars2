@@ -81,6 +81,7 @@ export class ResourceNodes {
         this.goldMaterial,
         goldNodes.length
       );
+      this.goldInstancedMesh.frustumCulled = false;
 
       const dummy = new THREE.Object3D();
       for (const node of goldNodes) {
@@ -93,14 +94,14 @@ export class ResourceNodes {
       this.group.add(this.goldInstancedMesh);
     }
 
-    // Odun noktası: ağaç (SPEC S6)
+    // Odun noktası: ağaç (SPEC S6 & R3 S2: işçilerden alçak/hafif küçük)
     if (woodNodes.length > 0) {
-      const trunk = new THREE.CylinderGeometry(0.14, 0.18, 0.5, 5);
-      trunk.translate(0, 0.25, 0);
-      const crown1 = new THREE.ConeGeometry(0.48, 0.8, 5);
-      crown1.translate(0, 0.75, 0);
-      const crown2 = new THREE.ConeGeometry(0.38, 0.65, 5);
-      crown2.translate(0, 1.15, 0);
+      const trunk = new THREE.CylinderGeometry(0.10, 0.12, 0.3, 5);
+      trunk.translate(0, 0.15, 0);
+      const crown1 = new THREE.ConeGeometry(0.35, 0.55, 5);
+      crown1.translate(0, 0.55, 0);
+      const crown2 = new THREE.ConeGeometry(0.28, 0.45, 5);
+      crown2.translate(0, 0.85, 0);
 
       this.woodGeometry = this.mergeGeometries([trunk, crown1, crown2]);
       this.woodMaterial = new THREE.MeshLambertMaterial({ color: 0x16a34a });
@@ -110,6 +111,7 @@ export class ResourceNodes {
         this.woodMaterial,
         woodNodes.length
       );
+      this.woodInstancedMesh.frustumCulled = false;
 
       const dummy = new THREE.Object3D();
       for (const node of woodNodes) {
@@ -215,6 +217,13 @@ export class ResourceNodes {
   // releaseWorker(node, workerId)
   public releaseWorker(node: ResourceNode, workerId: string): void {
     node.assignedWorkers.delete(workerId);
+  }
+
+  // SPEC S6: İşçinin bu noktadaki yuva indeksini (0 veya 1) döndürür
+  public getWorkerSlotIndex(node: ResourceNode, workerId: string): number {
+    const list = Array.from(node.assignedWorkers);
+    const idx = list.indexOf(workerId);
+    return idx >= 0 ? idx : 0;
   }
 
   // extract(node, amount) (gerçekte alınan miktarı döndürür; rezerv 0'ın altına inmez)

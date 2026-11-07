@@ -24,4 +24,6 @@ export const MATCH_RULES = {
   nodeOffsetMax: 2,
   startAccountGold: 0,
   cameraZoomLevelCount: 3,
+  unitSeparationRadius: 0.9,
+  rallySlotSpacing: 1.2,
 };

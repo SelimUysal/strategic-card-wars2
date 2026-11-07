@@ -9,8 +9,11 @@ export class Minimap {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private updateInterval: number | null = null;
+  private isDragging: boolean = false;
 
   private onPointerDownBound: (e: PointerEvent) => void;
+  private onPointerMoveBound: (e: PointerEvent) => void;
+  private onPointerUpBound: (e: PointerEvent) => void;
 
   constructor(
     private parent: HTMLElement,
@@ -46,10 +49,33 @@ export class Minimap {
     this.ctx = ctx;
 
     this.onPointerDownBound = (e: PointerEvent) => {
-      this.handleMinimapClick(e);
+      e.stopPropagation();
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      this.isDragging = true;
+      this.handleMinimapInteraction(e);
+    };
+
+    this.onPointerMoveBound = (e: PointerEvent) => {
+      e.stopPropagation();
+      if (this.isDragging) {
+        this.handleMinimapInteraction(e);
+      }
+    };
+
+    this.onPointerUpBound = (e: PointerEvent) => {
+      e.stopPropagation();
+      this.isDragging = false;
+      try {
+        this.canvas.releasePointerCapture(e.pointerId);
+      } catch (_) {}
     };
 
     this.canvas.addEventListener('pointerdown', this.onPointerDownBound);
+    this.canvas.addEventListener('pointermove', this.onPointerMoveBound);
+    this.canvas.addEventListener('pointerup', this.onPointerUpBound);
+    this.canvas.addEventListener('pointercancel', this.onPointerUpBound);
 
     this.draw();
 
@@ -59,8 +85,10 @@ export class Minimap {
     }, 100);
   }
 
-  private handleMinimapClick(e: PointerEvent): void {
+  private handleMinimapInteraction(e: PointerEvent): void {
     const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
     const ratioX = (e.clientX - rect.left) / rect.width;
     const ratioY = (e.clientY - rect.top) / rect.height;
 
@@ -113,7 +141,7 @@ export class Minimap {
       }
     }
 
-    // 2. Binalar
+    // 2. Binalar (Ana Karargâh belirgin işaretle gösterilir)
     const allBuildings = this.buildingManager.getBuildings();
     for (const b of allBuildings) {
       if (b.state === 'destroyed') continue;
@@ -122,14 +150,27 @@ export class Minimap {
         continue;
       }
 
-      this.ctx.fillStyle = b.team === 'player' ? this.playerColorHex : this.enemyColorHex;
       const rect = b.getRect();
-      this.ctx.fillRect(
-        rect.x * scaleX,
-        rect.y * scaleY,
-        Math.max(2, rect.w * scaleX),
-        Math.max(2, rect.h * scaleY)
-      );
+      if (b.defId === 'hq') {
+        this.ctx.fillStyle = b.team === 'player' ? this.playerColorHex : this.enemyColorHex;
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 1.5;
+        const hx = (rect.x + rect.w / 2) * scaleX;
+        const hy = (rect.y + rect.h / 2) * scaleY;
+        const hw = Math.max(6, rect.w * scaleX * 1.3);
+        const hh = Math.max(6, rect.h * scaleY * 1.3);
+
+        this.ctx.fillRect(hx - hw / 2, hy - hh / 2, hw, hh);
+        this.ctx.strokeRect(hx - hw / 2, hy - hh / 2, hw, hh);
+      } else {
+        this.ctx.fillStyle = b.team === 'player' ? this.playerColorHex : this.enemyColorHex;
+        this.ctx.fillRect(
+          rect.x * scaleX,
+          rect.y * scaleY,
+          Math.max(2, rect.w * scaleX),
+          Math.max(2, rect.h * scaleY)
+        );
+      }
     }
 
     // 3. Birimler
@@ -148,6 +189,22 @@ export class Minimap {
         this.ctx.fillRect(u.pos.x * scaleX - 1, u.pos.y * scaleY - 1, 2.5, 2.5);
       }
     }
+
+    // 4. S3: Kameranın görüş alanı çerçevesi (Viewport rectangle)
+    const corners = this.cameraController.getViewportGroundCorners();
+    if (corners.length === 4) {
+      this.ctx.strokeStyle = '#38bdf8';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const cx = corners[i].x * scaleX;
+        const cy = corners[i].y * scaleY;
+        if (i === 0) this.ctx.moveTo(cx, cy);
+        else this.ctx.lineTo(cx, cy);
+      }
+      this.ctx.closePath();
+      this.ctx.stroke();
+    }
   }
 
   public destroy(): void {
@@ -157,6 +214,9 @@ export class Minimap {
     }
 
     this.canvas.removeEventListener('pointerdown', this.onPointerDownBound);
+    this.canvas.removeEventListener('pointermove', this.onPointerMoveBound);
+    this.canvas.removeEventListener('pointerup', this.onPointerUpBound);
+    this.canvas.removeEventListener('pointercancel', this.onPointerUpBound);
 
     if (this.element.parentElement) {
       this.element.parentElement.removeChild(this.element);

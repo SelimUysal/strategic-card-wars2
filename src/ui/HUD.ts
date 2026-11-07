@@ -1,5 +1,6 @@
 import { BuildingManager } from '../buildings/BuildingManager';
 import { CommanderManager } from '../commanders/CommanderManager';
+import { MatchPhaseManager } from '../core/MatchPhaseManager';
 import { TimeManager } from '../core/TimeManager';
 import { REWARDS } from '../data/rewards';
 import { RewardManager } from '../progression/RewardManager';
@@ -11,6 +12,7 @@ export class HUD {
   private hqHpBarFillEl: HTMLElement;
   private timeEl: HTMLElement;
   private speedEl: HTMLElement;
+  private phaseEl: HTMLElement;
   private commandersEl: HTMLElement | null = null;
   private playerCommanderEl: HTMLElement | null = null;
   private enemyCommanderEl: HTMLElement | null = null;
@@ -23,18 +25,19 @@ export class HUD {
     private parent: HTMLElement,
     private buildingManager: BuildingManager,
     private timeManager: TimeManager,
+    private matchPhaseManager: MatchPhaseManager,
     private commanderManager: CommanderManager,
     private rewardManager: RewardManager | null,
     private difficultyId: DifficultyId,
     private enemyFaction: FactionDef
   ) {
     this.element = document.createElement('div');
-    this.element.className = 'hud-top-bar';
+    this.element.className = 'hud-container';
 
     const isCehennem = this.difficultyId === 'cehennem';
 
     this.element.innerHTML = `
-      <div class="hud-hq-box">
+      <div class="hud-hq-box" data-field="hq-box">
         <div class="hud-hq-title">Ana Karargâh</div>
         <div class="hud-hp-bar-bg">
           <div class="hud-hp-bar-fill" data-field="hq-fill"></div>
@@ -42,11 +45,12 @@ export class HUD {
         <div class="hud-hp-bar-text" data-field="hq-text">0 / 0</div>
       </div>
 
-      <div class="hud-center-info">
-        <div class="hud-time-speed">
-          <span>Süre: <span data-field="time">00:00</span></span>
+      <div class="hud-top-right-panel">
+        <div class="hud-clock-speed-box">
+          <span class="hud-time" data-field="time">00:00</span>
           <span class="hud-speed-badge" data-field="speed">1x</span>
         </div>
+        <div class="hud-phase-label" data-field="phase">Hazırlanma</div>
         ${
           isCehennem
             ? ''
@@ -62,11 +66,10 @@ export class HUD {
         </div>
         `
         }
-      </div>
-
-      <div class="hud-actions">
-        <button type="button" class="hud-btn" data-action="pause-resume">Duraklat</button>
-        <button type="button" class="hud-btn hud-btn-exit" data-action="exit">Çık</button>
+        <div class="hud-actions">
+          <button type="button" class="hud-btn" data-action="pause-resume">Duraklat</button>
+          <button type="button" class="hud-btn hud-btn-exit" data-action="exit">Çık</button>
+        </div>
       </div>
     `;
 
@@ -74,6 +77,7 @@ export class HUD {
     this.hqHpBarFillEl = this.element.querySelector('[data-field="hq-fill"]') as HTMLElement;
     this.timeEl = this.element.querySelector('[data-field="time"]') as HTMLElement;
     this.speedEl = this.element.querySelector('[data-field="speed"]') as HTMLElement;
+    this.phaseEl = this.element.querySelector('[data-field="phase"]') as HTMLElement;
     this.pauseResumeBtn = this.element.querySelector('[data-action="pause-resume"]') as HTMLButtonElement;
 
     if (!isCehennem) {
@@ -100,7 +104,6 @@ export class HUD {
 
     this.update();
 
-    // Saniyede yaklaşık 10 kez yenilenir (100 ms)
     this.updateInterval = window.setInterval(() => {
       this.update();
     }, 100);
@@ -137,7 +140,14 @@ export class HUD {
     }
     this.speedEl.textContent = speedLabel;
 
-    // 4. Komutanlar
+    // 4. Faz etiketi ('Hazırlanma', 'Savaş başlıyor', 'Savaş başladı')
+    const phase = this.matchPhaseManager.getPhase();
+    let phaseText = 'Hazırlanma';
+    if (phase === 'march') phaseText = 'Savaş başlıyor';
+    else if (phase === 'war') phaseText = 'Savaş başladı';
+    this.phaseEl.textContent = phaseText;
+
+    // 5. Komutanlar
     if (this.commandersEl && this.playerCommanderEl && this.enemyCommanderEl) {
       const playerCmdDef = this.commanderManager.getCommanderDef('player');
       this.playerCommanderEl.textContent = playerCmdDef ? playerCmdDef.nameTr : '-';
@@ -150,7 +160,7 @@ export class HUD {
       }
     }
 
-    // 5. Duraklat / Devam Et düğmesi
+    // 6. Duraklat / Devam Et düğmesi
     this.updatePauseResumeButton();
   }
 

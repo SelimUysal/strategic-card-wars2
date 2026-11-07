@@ -34,7 +34,11 @@ export class ProductionManager {
     private buildingManager?: BuildingManager,
     private workerManager?: WorkerManager,
     private eventManager?: EventManager
-  ) {}
+  ) {
+    if (this.unitManager.setPathfinding) {
+      this.unitManager.setPathfinding(this.pathfinding);
+    }
+  }
 
   public setCardAvailabilityProvider(
     provider: (team: Team, cardId: CardId) => boolean
@@ -218,35 +222,49 @@ export class ProductionManager {
   }
 
   private findSpawnTileAroundBuilding(buildingId: string): { x: number; y: number } {
-    // BuildingManager üzerinden bina nesnesini sorgula
-    // Eğer bina bulunamazsa harita merkezine yakın yürünebilir bir yer seç
     const building = this.findBuildingById(buildingId);
     if (!building) {
       return { x: 10.5, y: 10.5 };
     }
 
     const rect = building.getRect();
-    const candidates: TilePos[] = [];
+    const allUnits = this.unitManager.getUnits();
 
-    // Üst ve alt kenarlar
-    for (let x = rect.x - 1; x <= rect.x + rect.w; x++) {
-      candidates.push({ x, y: rect.y - 1 });
-      candidates.push({ x, y: rect.y + rect.h });
-    }
+    // SPEC S3: Üretilen birim binanın çevresindeki boş yürünebilir karelerde her biri FARKLI bir noktada doğar
+    // Halka halka içten dışa arama (r = 1, 2, 3...)
+    for (let r = 1; r <= 3; r++) {
+      const candidates: TilePos[] = [];
 
-    // Sol ve sağ kenarlar
-    for (let y = rect.y; y < rect.y + rect.h; y++) {
-      candidates.push({ x: rect.x - 1, y });
-      candidates.push({ x: rect.x + rect.w, y });
-    }
+      // Üst ve alt kenarlar
+      for (let x = rect.x - r; x < rect.x + rect.w + r; x++) {
+        candidates.push({ x, y: rect.y - r });
+        candidates.push({ x, y: rect.y + rect.h + r - 1 });
+      }
 
-    for (const c of candidates) {
-      if (this.pathfinding.isWalkable(c.x, c.y)) {
-        return { x: c.x + 0.5, y: c.y + 0.5 };
+      // Sol ve sağ kenarlar
+      for (let y = rect.y - r + 1; y < rect.y + rect.h + r - 1; y++) {
+        candidates.push({ x: rect.x - r, y });
+        candidates.push({ x: rect.x + rect.w + r - 1, y });
+      }
+
+      // Bu halkadaki boş ve yürünebilir adayları kontrol et
+      for (const c of candidates) {
+        if (!this.pathfinding.isWalkable(c.x, c.y)) continue;
+
+        // Kare üzerinde başka canlı birim var mı? (< 0.7 mesafe)
+        const occupied = allUnits.some(
+          (u) =>
+            u.state !== 'dead' &&
+            Math.hypot(u.pos.x - (c.x + 0.5), u.pos.y - (c.y + 0.5)) < 0.7
+        );
+
+        if (!occupied) {
+          return { x: c.x + 0.5, y: c.y + 0.5 };
+        }
       }
     }
 
-    // Çevrede hemen bulunamazsa en yakın yürünebilir kareyi al
+    // Yakındaki tüm kareler doluysa en yakın yürünebilir kareyi al
     const center = building.getCenter();
     const nearest = this.pathfinding.findNearestWalkableTile({
       x: Math.floor(center.x),

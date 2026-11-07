@@ -35,6 +35,8 @@ import { MarketScreen } from '../ui/MarketScreen';
 import { Minimap } from '../ui/Minimap';
 import { PrepScreen } from '../ui/PrepScreen';
 import { ResourcePanel } from '../ui/ResourcePanel';
+import { WorldLabels } from '../ui/WorldLabels';
+import { UnitOverlay } from '../ui/UnitOverlay';
 import { UnitManager } from '../units/UnitManager';
 import { ModifierRegistry } from '../units/UnitStats';
 import { FogOfWar } from '../world/FogOfWar';
@@ -78,6 +80,7 @@ export class Game {
   private resourceNodes: ResourceNodes | null = null;
   private fogOfWar: FogOfWar | null = null;
   private unitManager: UnitManager | null = null;
+  private unitOverlay: UnitOverlay | null = null;
   private buildingManager: BuildingManager | null = null;
   private resourceManager: ResourceManager;
   private workerManager: WorkerManager | null = null;
@@ -102,6 +105,7 @@ export class Game {
   private hud: HUD | null = null;
   private cardPanel: CardPanel | null = null;
   private minimap: Minimap | null = null;
+  private worldLabels: WorldLabels | null = null;
 
   // Menü ve akış ekranları (SPEC S1)
   private mainMenu: MainMenu | null = null;
@@ -362,6 +366,16 @@ export class Game {
     this.unitManager.setTeamColors(playerHex, enemyHex);
     this.buildingManager.setTeamColors(playerHex, enemyHex);
 
+    // R4 SPEC S3: UnitOverlay oluşturma (sahneye ekler ve UnitManager'a bağlar)
+    this.unitOverlay = new UnitOverlay(
+      this.sceneManager.getScene(),
+      this.cameraController,
+      this.fogOfWar || undefined,
+      playerHex,
+      enemyHex
+    );
+    this.unitManager.setUnitOverlay(this.unitOverlay);
+
     // 10. Komutanlar: CommanderManager ile seç ve uygula (Cehennem'de ikisi de null)
     this.commanderAbilities = new CommanderAbilities(this.unitManager);
     this.commanderManager.setDependencies({
@@ -576,6 +590,10 @@ export class Game {
           this.minimap.destroy();
           this.minimap = null;
         }
+        if (this.worldLabels) {
+          this.worldLabels.destroy();
+          this.worldLabels = null;
+        }
 
         const appContainer = this.canvas.parentElement || document.body;
         this.gameOverScreen = new GameOverScreen(
@@ -613,6 +631,16 @@ export class Game {
     this.registerGameSystem(this.fogOfWar);
     this.registerGameSystem(this.victoryConditions);
 
+    this.worldLabels = new WorldLabels(
+      this.sceneManager.getScene(),
+      this.buildingManager,
+      this.commanderManager,
+      this.fogOfWar,
+      playerFaction,
+      enemyFaction
+    );
+    this.registerGameSystem(this.worldLabels);
+
     // 16. MatchPhaseManager.'prep' ve startMatchClock()
     this.matchPhaseManager.startMatch();
     this.startMatchClock();
@@ -628,6 +656,7 @@ export class Game {
       this.uiLayer,
       this.buildingManager,
       this.timeManager,
+      this.matchPhaseManager,
       this.commanderManager,
       this.rewardManager,
       config.difficultyId,
@@ -682,6 +711,10 @@ export class Game {
       this.minimap.destroy();
       this.minimap = null;
     }
+    if (this.worldLabels) {
+      this.worldLabels.destroy();
+      this.worldLabels = null;
+    }
     if (this.uiLayer) {
       if (this.uiLayer.parentElement) {
         this.uiLayer.parentElement.removeChild(this.uiLayer);
@@ -725,6 +758,11 @@ export class Game {
       this.sceneManager.getScene().remove(this.unitManager.getGroup());
       this.unitManager.dispose();
       this.unitManager = null;
+    }
+    // R4 SPEC S3: UnitOverlay yok etme
+    if (this.unitOverlay) {
+      this.unitOverlay.destroy();
+      this.unitOverlay = null;
     }
     if (this.buildingManager) {
       this.sceneManager.getScene().remove(this.buildingManager.getGroup());

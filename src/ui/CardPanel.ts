@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { BuildingManager } from '../buildings/BuildingManager';
 import { ConstructionManager } from '../buildings/ConstructionManager';
 import { ProductionManager, ProductionQueueItem } from '../buildings/ProductionManager';
@@ -12,12 +11,15 @@ import { UNITS } from '../data/units';
 import { ResourceManager } from '../economy/ResourceManager';
 import { WorkerManager } from '../economy/WorkerManager';
 import { BuildingId, CardDef, CardId, TilePos, UnitId } from '../types';
+import { UnitOverlay } from './UnitOverlay';
+import { BuildPreview } from './BuildPreview';
 
 interface DragState {
   cardId: CardId;
   buildingId: BuildingId;
   footprint: { w: number; h: number };
   pointerId: number;
+  pointerType: string;
   startX: number;
   startY: number;
   isDragging: boolean;
@@ -83,13 +85,12 @@ export class CardPanel {
     startX: number;
     startY: number;
     pointerId: number;
+    pointerType: string;
   } | null = null;
 
   private lastPointerUpHandledTime: number = 0;
 
-  private ghostMesh: THREE.Mesh | null = null;
-  private ghostMaterial: THREE.MeshBasicMaterial | null = null;
-  private raycaster: THREE.Raycaster = new THREE.Raycaster();
+  private buildPreview: BuildPreview | null = null;
 
   private cardViews: Map<CardId, CardItemView> = new Map();
   private workerViews: Map<'altin_madencisi' | 'oduncu', WorkerButtonView> = new Map();
@@ -151,12 +152,19 @@ export class CardPanel {
       const cardDef = CARDS[cardId];
       if (!cardDef) continue;
 
+      const isUnit = cardDef.refType === 'unit';
+      const badgeUrl = isUnit ? UnitOverlay.getIconDataUrl(cardDef.refId) : '';
+      const badgeHtml = isUnit
+        ? `<img class="game-card-corner-badge" src="${badgeUrl}" alt="${cardDef.nameTr}" />`
+        : '';
+
       const cardEl = document.createElement('div');
       cardEl.className = 'game-card';
       cardEl.setAttribute('data-card-id', cardDef.id);
 
       cardEl.innerHTML = `
         <div class="game-card-toast" data-field="toast"></div>
+        ${badgeHtml}
         <div>
           <div class="game-card-name" data-field="name">${cardDef.nameTr}</div>
           <div class="game-card-role" data-field="role">${cardDef.roleTr}</div>
@@ -249,9 +257,12 @@ export class CardPanel {
   private setupWorkerButtons(): void {
     const goldMinerDef = UNITS.altin_madencisi;
     const woodcutterDef = UNITS.oduncu;
+    const goldBadgeUrl = UnitOverlay.getIconDataUrl('altin_madencisi');
+    const woodBadgeUrl = UnitOverlay.getIconDataUrl('oduncu');
 
     this.workerPanelEl.innerHTML = `
       <button type="button" class="worker-btn" data-worker="altin_madencisi">
+        <img class="worker-btn-corner-badge" src="${goldBadgeUrl}" alt="Madenci" />
         <span class="worker-btn-name">Altın Madencisi</span>
         <span class="worker-btn-cost">${goldMinerDef.costGold} / ${goldMinerDef.costWood}</span>
         <div class="worker-btn-info" data-field="info" style="display: none;"></div>
@@ -261,6 +272,7 @@ export class CardPanel {
         <div class="game-card-toast" data-field="toast"></div>
       </button>
       <button type="button" class="worker-btn" data-worker="oduncu">
+        <img class="worker-btn-corner-badge" src="${woodBadgeUrl}" alt="Oduncu" />
         <span class="worker-btn-name">Oduncu</span>
         <span class="worker-btn-cost">${woodcutterDef.costGold} / ${woodcutterDef.costWood}</span>
         <div class="worker-btn-info" data-field="info" style="display: none;"></div>
@@ -502,6 +514,7 @@ export class CardPanel {
       startX: e.clientX,
       startY: e.clientY,
       pointerId: e.pointerId,
+      pointerType: e.pointerType,
     };
   }
 
@@ -521,6 +534,7 @@ export class CardPanel {
           buildingId: this.pointerDownCandidate.buildingId,
           footprint: this.pointerDownCandidate.footprint,
           pointerId: this.pointerDownCandidate.pointerId,
+          pointerType: this.pointerDownCandidate.pointerType,
           startX: this.pointerDownCandidate.startX,
           startY: this.pointerDownCandidate.startY,
           isDragging: true,
@@ -534,32 +548,29 @@ export class CardPanel {
         }
 
         this.cameraController.setInputEnabled(false);
-        this.createGhostMesh(this.dragState.footprint);
+
+        // SPEC S1 - S6: BuildPreview başlat
+        if (this.buildPreview) {
+          this.buildPreview.destroy();
+        }
+        this.buildPreview = new BuildPreview(
+          this.sceneManager.getScene(),
+          this.cameraController.getCamera(),
+          this.canvas,
+          this.constructionManager
+        );
+        this.buildPreview.start(this.dragState.buildingId);
       } else {
         return;
       }
     }
 
-    if (!this.dragState || !this.dragState.isDragging) return;
+    if (!this.dragState || !this.dragState.isDragging || !this.buildPreview) return;
 
-    const tile = this.screenToGroundTile(e.clientX, e.clientY, this.dragState.footprint);
-    this.dragState.currentTile = tile;
-
-    if (tile && this.ghostMesh) {
-      const fp = this.dragState.footprint;
-      this.ghostMesh.position.set(tile.x + fp.w / 2, 0.05, tile.y + fp.h / 2);
-      this.ghostMesh.visible = true;
-
-      const check = this.constructionManager.canPlace('player', this.dragState.buildingId, tile);
-      this.dragState.isValid = check.ok;
-
-      if (this.ghostMaterial) {
-        this.ghostMaterial.color.setHex(check.ok ? 0x22c55e : 0xef4444);
-      }
-    } else if (this.ghostMesh) {
-      this.ghostMesh.visible = false;
-      this.dragState.isValid = false;
-    }
+    const isTouch = e.pointerType === 'touch' || this.dragState.pointerType === 'touch';
+    this.buildPreview.update(e.clientX, e.clientY, isTouch);
+    this.dragState.currentTile = this.buildPreview.getCurrentTile();
+    this.dragState.isValid = this.buildPreview.isValid();
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -575,7 +586,6 @@ export class CardPanel {
       }
 
       this.cameraController.setInputEnabled(true);
-      this.removeGhostMesh();
 
       const panelRect = this.element.getBoundingClientRect();
       const isOverPanel =
@@ -584,13 +594,25 @@ export class CardPanel {
         e.clientY >= panelRect.top &&
         e.clientY <= panelRect.bottom;
 
+      // SPEC S6: Dokunmatik bırakıldığında da bu ofsetli kareye yerleştirilir
       if (!isOverPanel && this.dragState.isValid && this.dragState.currentTile) {
         this.constructionManager.place('player', this.dragState.buildingId, this.dragState.currentTile);
+      }
+
+      // S7: Temizlik
+      if (this.buildPreview) {
+        this.buildPreview.destroy();
+        this.buildPreview = null;
       }
 
       this.dragState = null;
       this.update();
       return;
+    }
+
+    if (this.buildPreview) {
+      this.buildPreview.destroy();
+      this.buildPreview = null;
     }
 
     this.dragState = null;
@@ -894,75 +916,6 @@ export class CardPanel {
     }
   }
 
-  private screenToGroundTile(
-    clientX: number,
-    clientY: number,
-    footprint: { w: number; h: number }
-  ): TilePos | null {
-    const rect = this.canvas.getBoundingClientRect();
-    if (
-      clientX < rect.left ||
-      clientX > rect.right ||
-      clientY < rect.top ||
-      clientY > rect.bottom
-    ) {
-      return null;
-    }
-
-    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
-    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(
-      new THREE.Vector2(ndcX, ndcY),
-      this.cameraController.getCamera()
-    );
-
-    const ray = this.raycaster.ray;
-
-    if (Math.abs(ray.direction.y) < 0.00001) return null;
-
-    const t = -ray.origin.y / ray.direction.y;
-    if (t < 0) return null;
-
-    const worldX = ray.origin.x + t * ray.direction.x;
-    const worldZ = ray.origin.z + t * ray.direction.z;
-
-    const tileX = Math.floor(worldX - footprint.w / 2);
-    const tileY = Math.floor(worldZ - footprint.h / 2);
-
-    return { x: tileX, y: tileY };
-  }
-
-  private createGhostMesh(footprint: { w: number; h: number }): void {
-    this.removeGhostMesh();
-
-    const geometry = new THREE.PlaneGeometry(footprint.w, footprint.h);
-    geometry.rotateX(-Math.PI / 2);
-
-    this.ghostMaterial = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
-      transparent: true,
-      opacity: 0.5,
-      depthWrite: false,
-    });
-
-    this.ghostMesh = new THREE.Mesh(geometry, this.ghostMaterial);
-    this.ghostMesh.visible = false;
-    this.sceneManager.getScene().add(this.ghostMesh);
-  }
-
-  private removeGhostMesh(): void {
-    if (this.ghostMesh) {
-      this.sceneManager.getScene().remove(this.ghostMesh);
-      this.ghostMesh.geometry.dispose();
-      if (this.ghostMaterial) {
-        this.ghostMaterial.dispose();
-        this.ghostMaterial = null;
-      }
-      this.ghostMesh = null;
-    }
-  }
-
   public destroy(): void {
     if (this.updateInterval !== null) {
       clearInterval(this.updateInterval);
@@ -987,7 +940,10 @@ export class CardPanel {
     window.removeEventListener('pointerup', this.onPointerUpBound);
     window.removeEventListener('pointercancel', this.onPointerUpBound);
 
-    this.removeGhostMesh();
+    if (this.buildPreview) {
+      this.buildPreview.destroy();
+      this.buildPreview = null;
+    }
     this.cameraController.setInputEnabled(true);
 
     if (this.element.parentElement) {

@@ -18,6 +18,22 @@ export type PlaceFailureReason =
   | 'overlap'
   | 'out_of_bounds';
 
+export type PlaceGeneralReason = PlaceFailureReason;
+
+export interface TileValidityDetail {
+  x: number;
+  y: number;
+  isValid: boolean;
+  reason?: 'out_of_bounds' | 'not_in_zone' | 'terrain' | 'overlap';
+}
+
+export interface BuildingPlacementValidity {
+  isValid: boolean;
+  generalReason?: PlaceGeneralReason;
+  reasonText?: string;
+  tiles: TileValidityDetail[];
+}
+
 export interface CanPlaceResult {
   ok: boolean;
   reason?: PlaceFailureReason;
@@ -33,6 +49,147 @@ export class ConstructionManager {
     private modifierRegistry?: ModifierRegistry,
     private eventManager?: EventManager
   ) {}
+
+  public getMap(): GameMap {
+    return this.map;
+  }
+
+  // SPEC S3: Kare bazlı uygunluk sorgusu için salt-okur fonksiyon
+  public getTileValidity(
+    team: Team,
+    buildingId: BuildingId,
+    tile: TilePos
+  ): BuildingPlacementValidity {
+    const def = BUILDINGS[buildingId];
+    if (!def || buildingId === 'hq') {
+      return {
+        isValid: false,
+        generalReason: 'card_not_available',
+        reasonText: 'Kullanılamaz',
+        tiles: [],
+      };
+    }
+
+    // Kart kullanılabilirlik kontrolü
+    if (this.cardAvailabilityProvider) {
+      const cardId = this.getCardIdForBuilding(buildingId);
+      if (!cardId || !this.cardAvailabilityProvider(team, cardId)) {
+        return {
+          isValid: false,
+          generalReason: 'card_not_available',
+          reasonText: 'Kart kullanılamaz',
+          tiles: [],
+        };
+      }
+    }
+
+    // Sınır kontrolü: BUILDINGS[id].maxCount
+    const activeBuildings = this.buildingManager
+      .getBuildingsOfType(team, buildingId)
+      .filter((b) => b.state !== 'destroyed');
+    const isLimitReached = activeBuildings.length >= def.maxCount;
+
+    // Bedel kontrolü
+    const canAfford = this.resourceManager.canAfford(team, def.costGold, def.costWood);
+
+    const w = def.footprint.w;
+    const h = def.footprint.h;
+    const allBuildings = this.buildingManager
+      .getBuildings()
+      .filter((b) => b.state !== 'destroyed');
+
+    const tiles: TileValidityDetail[] = [];
+    let hasOutOfBounds = false;
+    let hasNotInZone = false;
+    let hasTerrainInvalid = false;
+    let hasOverlap = false;
+
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const tx = tile.x + dx;
+        const ty = tile.y + dy;
+
+        // 1. Harita dışı
+        if (!this.map.inBounds(tx, ty)) {
+          tiles.push({ x: tx, y: ty, isValid: false, reason: 'out_of_bounds' });
+          hasOutOfBounds = true;
+          continue;
+        }
+
+        // 2. Bölge dışı
+        const centerX = tx + 0.5;
+        const centerY = ty + 0.5;
+        if (!this.map.isInPlayerZone(team, centerX, centerY)) {
+          tiles.push({ x: tx, y: ty, isValid: false, reason: 'not_in_zone' });
+          hasNotInZone = true;
+          continue;
+        }
+
+        // 3. Zemin kontrolü
+        if (!this.map.isBuildable(tx, ty)) {
+          tiles.push({ x: tx, y: ty, isValid: false, reason: 'terrain' });
+          hasTerrainInvalid = true;
+          continue;
+        }
+
+        // 4. Çakışma kontrolü
+        let tileOverlap = false;
+        for (const b of allBuildings) {
+          const rect = b.getRect();
+          if (tx >= rect.x && tx < rect.x + rect.w && ty >= rect.y && ty < rect.y + rect.h) {
+            tileOverlap = true;
+            break;
+          }
+        }
+
+        if (tileOverlap) {
+          tiles.push({ x: tx, y: ty, isValid: false, reason: 'overlap' });
+          hasOverlap = true;
+          continue;
+        }
+
+        tiles.push({ x: tx, y: ty, isValid: true });
+      }
+    }
+
+    // SPEC S3: Her kare kendi uygunluk rengini alır.
+    // Binanın genel durumu ise tüm şartlar sağlandığında uygundur.
+    const allTilesValid = tiles.length > 0 && tiles.every((t) => t.isValid);
+    const overallValid = allTilesValid && !isLimitReached && canAfford;
+
+    let generalReason: PlaceGeneralReason | undefined = undefined;
+    let reasonText: string | undefined = undefined;
+
+    // SPEC S5: Açıklayıcı ipucu metni
+    if (!overallValid) {
+      if (isLimitReached) {
+        generalReason = 'limit';
+        reasonText = 'Sınıra ulaşıldı';
+      } else if (!canAfford) {
+        generalReason = 'not_enough_resources';
+        reasonText = 'Kaynak yetersiz';
+      } else if (hasOutOfBounds) {
+        generalReason = 'out_of_bounds';
+        reasonText = 'Harita dışı';
+      } else if (hasNotInZone) {
+        generalReason = 'not_in_zone';
+        reasonText = 'Bölge dışı';
+      } else if (hasOverlap) {
+        generalReason = 'overlap';
+        reasonText = 'Başka yapıyla çakışıyor';
+      } else if (hasTerrainInvalid) {
+        generalReason = 'terrain';
+        reasonText = 'Zemin uygun değil';
+      }
+    }
+
+    return {
+      isValid: overallValid,
+      generalReason,
+      reasonText,
+      tiles,
+    };
+  }
 
   // SPEC S1: setCardAvailabilityProvider(fonksiyon(team, cardId) -> boolean)
   public setCardAvailabilityProvider(

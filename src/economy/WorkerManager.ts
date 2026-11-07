@@ -31,6 +31,10 @@ export class WorkerManager {
     private modifierRegistry?: ModifierRegistry,
     private eventManager?: EventManager
   ) {
+    if (this.unitManager.setPathfinding) {
+      this.unitManager.setPathfinding(this.pathfinding);
+    }
+
     if (this.eventManager) {
       // SPEC S2: Adım 8'de üretilen yeni işçi, 'unitSpawned' olayıyla otomatik atanır
       this.eventManager.on('unitSpawned', ({ unit }: { unit: Unit }) => {
@@ -202,12 +206,17 @@ export class WorkerManager {
         continue;
       }
 
-      // Noktaya olan mesafe kontrolü (menzil 1: kenara bitişik)
+      // SPEC S6: İşçiler aynı noktada farklı yanlarda durur (her işçi atandığı yuva için farklı yaklaşma karesi alır)
+      const approachTile = this.getApproachTileForWorker(node, unit.id);
+      const isAtApproachTile =
+        Math.floor(unit.pos.x) === approachTile.x && Math.floor(unit.pos.y) === approachTile.y;
+
+      // Alternatif: eğer hedefe 1 mesafe yakınsa ve yaklaşma karesi ulaşılamıyorsa
       const ux = Math.floor(unit.pos.x);
       const uy = Math.floor(unit.pos.y);
-      const dist = Math.max(Math.abs(ux - node.tile.x), Math.abs(uy - node.tile.y));
+      const distToNode = Math.max(Math.abs(ux - node.tile.x), Math.abs(uy - node.tile.y));
 
-      if (dist <= 1) {
+      if (isAtApproachTile || (distToNode <= 1 && unit.state === 'gathering')) {
         // Noktaya ulaşıldı: toplama moduna geç
         unit.state = 'gathering';
         unit.rotationY = Math.atan2(node.tile.x + 0.5 - unit.pos.x, node.tile.y + 0.5 - unit.pos.y);
@@ -238,16 +247,18 @@ export class WorkerManager {
           }
         }
       } else {
-        // Henüz noktada değil: eğer hareket halinde değilse yol bul ve yürü
+        // Henüz yaklaşma karesinde değil: yol bul ve yaklaşma karesine yürü
         if (unit.state !== 'moving') {
-          const path = this.pathfinding.findPathToRect(
+          const path = this.pathfinding.findPath(
             { x: ux, y: uy },
-            { x: node.tile.x, y: node.tile.y, w: 1, h: 1 },
-            1
+            approachTile
           );
 
           if (path && path.length > 0) {
             unit.setPath(path);
+          } else if (distToNode <= 1) {
+            // Yanındaysa doğrudan toplamaya başla
+            unit.state = 'gathering';
           } else {
             // Yürünemiyorsa atamayı serbest bırak ve boşta bekle
             this.resourceNodes.releaseWorker(node, unit.id);
@@ -261,6 +272,50 @@ export class WorkerManager {
     for (const id of deadWorkers) {
       this.unregisterWorker(id);
     }
+  }
+
+  // SPEC S6: Her işçi atandığı yuva için farklı bir yaklaşma karesi alır [EK]
+  private getApproachTileForWorker(node: ResourceNode, workerId: string): TilePos {
+    const slotIdx = this.resourceNodes.getWorkerSlotIndex(node, workerId);
+
+    // Karşıt yön çiftleri (örneğin Batı/Doğu veya Kuzey/Güney)
+    const sidesPair1: [TilePos, TilePos] = [
+      { x: node.tile.x - 1, y: node.tile.y }, // Batı
+      { x: node.tile.x + 1, y: node.tile.y }, // Doğu
+    ];
+    const sidesPair2: [TilePos, TilePos] = [
+      { x: node.tile.x, y: node.tile.y - 1 }, // Kuzey
+      { x: node.tile.x, y: node.tile.y + 1 }, // Güney
+    ];
+
+    if (
+      this.pathfinding.isWalkable(sidesPair1[0].x, sidesPair1[0].y) &&
+      this.pathfinding.isWalkable(sidesPair1[1].x, sidesPair1[1].y)
+    ) {
+      return slotIdx === 0 ? sidesPair1[0] : sidesPair1[1];
+    }
+
+    if (
+      this.pathfinding.isWalkable(sidesPair2[0].x, sidesPair2[0].y) &&
+      this.pathfinding.isWalkable(sidesPair2[1].x, sidesPair2[1].y)
+    ) {
+      return slotIdx === 0 ? sidesPair2[0] : sidesPair2[1];
+    }
+
+    // Yürünebilir komşulardan birini al
+    const allNeighbors: TilePos[] = [
+      sidesPair1[0], sidesPair1[1], sidesPair2[0], sidesPair2[1],
+      { x: node.tile.x - 1, y: node.tile.y - 1 },
+      { x: node.tile.x + 1, y: node.tile.y + 1 },
+      { x: node.tile.x - 1, y: node.tile.y + 1 },
+      { x: node.tile.x + 1, y: node.tile.y - 1 },
+    ];
+    const walkable = allNeighbors.filter((p) => this.pathfinding.isWalkable(p.x, p.y));
+    if (walkable.length > 0) {
+      return walkable[slotIdx % walkable.length];
+    }
+
+    return node.tile;
   }
 
   private assignWorkerToNode(state: WorkerState): void {
@@ -281,11 +336,8 @@ export class WorkerManager {
         state.assignedNodeId = node.id;
         state.gatherAccumulator = 0;
 
-        const path = this.pathfinding.findPathToRect(
-          workerTile,
-          { x: node.tile.x, y: node.tile.y, w: 1, h: 1 },
-          1
-        );
+        const approachTile = this.getApproachTileForWorker(node, state.unit.id);
+        const path = this.pathfinding.findPath(workerTile, approachTile);
         if (path && path.length > 0) {
           state.unit.setPath(path);
         }

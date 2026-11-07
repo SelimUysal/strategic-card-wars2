@@ -26,6 +26,9 @@ export class BattleAI {
     private combatManager: CombatManager,
     private eventManager?: EventManager
   ) {
+    if (this.unitManager.setPathfinding) {
+      this.unitManager.setPathfinding(this.pathfinding);
+    }
     this.initPoints();
 
     // SPEC S4: Yeni üretilen asker, o anki evrenin davranışını uygular
@@ -62,35 +65,81 @@ export class BattleAI {
       (u) => u.state !== 'dead' && !UNITS[u.defId]?.tags.includes('worker')
     );
 
-    for (const soldier of soldiers) {
-      this.applySoldierPhaseBehavior(soldier, phase);
+    // SPEC S4: Askerleri takımlarına göre grupla ve yuva indekslerini belirle
+    const playerSoldiers = soldiers.filter((s) => s.team === 'player');
+    const enemySoldiers = soldiers.filter((s) => s.team === 'enemy');
+
+    for (let i = 0; i < playerSoldiers.length; i++) {
+      this.applySoldierPhaseBehavior(playerSoldiers[i], phase, i);
+    }
+    for (let i = 0; i < enemySoldiers.length; i++) {
+      this.applySoldierPhaseBehavior(enemySoldiers[i], phase, i);
     }
   }
 
-  private applySoldierPhaseBehavior(soldier: Unit, phase: MatchPhase): void {
+  // SPEC S4: Toplanma ve ortak alanda bekleyen askerler için yuva hesaplama [EK]
+  private getSlotTargetTile(centerTile: TilePos, slotIndex: number): TilePos {
+    const spacing = MATCH_RULES.rallySlotSpacing;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (slotIndex > 0) {
+      if (slotIndex <= 6) {
+        const angle = (slotIndex - 1) * ((2 * Math.PI) / 6);
+        offsetX = Math.cos(angle) * spacing;
+        offsetY = Math.sin(angle) * spacing;
+      } else if (slotIndex <= 18) {
+        const angle = (slotIndex - 7) * ((2 * Math.PI) / 12);
+        offsetX = Math.cos(angle) * (spacing * 2);
+        offsetY = Math.sin(angle) * (spacing * 2);
+      } else {
+        const angle = (slotIndex - 19) * ((2 * Math.PI) / 18);
+        offsetX = Math.cos(angle) * (spacing * 3);
+        offsetY = Math.sin(angle) * (spacing * 3);
+      }
+    }
+
+    const targetX = Math.round(centerTile.x + offsetX);
+    const targetY = Math.round(centerTile.y + offsetY);
+
+    // SPEC S4: Yuva yürünemez kareye denk gelirse en yakın yürünebilir kareye kaydırılır
+    const walkable = this.pathfinding.findNearestWalkableTile({ x: targetX, y: targetY });
+    return walkable ? walkable : centerTile;
+  }
+
+  private applySoldierPhaseBehavior(soldier: Unit, phase: MatchPhase, slotIndex: number = 0): void {
     if (soldier.state === 'dead') return;
 
     if (phase === 'prep') {
-      // SPEC S4 'prep': askerler toplanma noktasında bekler
-      const rally = this.rallyPoints[soldier.team];
-      const dist = Math.hypot(soldier.pos.x - (rally.x + 0.5), soldier.pos.y - (rally.y + 0.5));
-      if (dist > 1.8 && soldier.state !== 'moving') {
+      // SPEC S4 'prep': askerler toplanma noktası etrafında ayrı yuvalara yerleşir
+      const rallyCenter = this.rallyPoints[soldier.team];
+      const slotTile = this.getSlotTargetTile(rallyCenter, slotIndex);
+      const dist = Math.hypot(
+        soldier.pos.x - (slotTile.x + 0.5),
+        soldier.pos.y - (slotTile.y + 0.5)
+      );
+
+      if (dist > 0.8 && soldier.state !== 'moving') {
         const path = this.pathfinding.findPath(
           { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
-          rally
+          slotTile
         );
         if (path && path.length > 0) {
           soldier.setPath(path);
         }
       }
     } else if (phase === 'march') {
-      // SPEC S4 'march': bütün askerler ortak alana yürür ve orada bekler; kimse saldırmaz
-      const inCommon = this.map.isInCommonArea(Math.floor(soldier.pos.x), Math.floor(soldier.pos.y));
-      if (!inCommon && soldier.state !== 'moving') {
-        const path = this.pathfinding.findPathToRect(
+      // SPEC S4 'march': bütün askerler ortak alanda ayrı yuvalara yerleşir
+      const slotTile = this.getSlotTargetTile(this.commonAreaCenterTile, slotIndex);
+      const dist = Math.hypot(
+        soldier.pos.x - (slotTile.x + 0.5),
+        soldier.pos.y - (slotTile.y + 0.5)
+      );
+
+      if (dist > 0.8 && soldier.state !== 'moving') {
+        const path = this.pathfinding.findPath(
           { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
-          this.map.commonArea,
-          1
+          slotTile
         );
         if (path && path.length > 0) {
           soldier.setPath(path);

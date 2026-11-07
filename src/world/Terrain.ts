@@ -41,6 +41,7 @@ export class Terrain {
       );
       instancedMesh.castShadow = false;
       instancedMesh.receiveShadow = true;
+      instancedMesh.frustumCulled = false;
 
       const dummy = new THREE.Object3D();
       for (let i = 0; i < positions.length; i++) {
@@ -72,11 +73,11 @@ export class Terrain {
         };
 
       case 'forest':
-        // Ağaç (koni ve gövde silindiri birleşimi)
-        const trunkGeo = new THREE.CylinderGeometry(0.12, 0.15, 0.35, 5);
-        trunkGeo.translate(0, 0.175, 0);
-        const foliageGeo = new THREE.ConeGeometry(0.42, 0.85, 5);
-        foliageGeo.translate(0, 0.75, 0);
+        // Ağaç (koni ve gövde silindiri birleşimi) - S2: işçilerden alçak/hafif küçük
+        const trunkGeo = new THREE.CylinderGeometry(0.08, 0.1, 0.25, 5);
+        trunkGeo.translate(0, 0.125, 0);
+        const foliageGeo = new THREE.ConeGeometry(0.32, 0.65, 5);
+        foliageGeo.translate(0, 0.55, 0);
 
         // İki parçayı birleştir
         const forestGeo = this.mergeGeometries([trunkGeo, foliageGeo]);
