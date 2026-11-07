@@ -11,7 +11,8 @@ import { CommanderAbilities } from '../commanders/CommanderAbilities';
 import { CommanderManager } from '../commanders/CommanderManager';
 import { BUILDINGS } from '../data/buildings';
 import { DIFFICULTIES } from '../data/difficulties';
-import { DEFAULT_PLAYER_FACTION, FACTIONS } from '../data/factions';
+import { ENEMY_IDS } from '../data/enemies';
+import { DEFAULT_PLAYER_FACTION, FACTIONS, HELL_FACTIONS } from '../data/factions';
 import { MAPS } from '../data/maps';
 import { UNITS } from '../data/units';
 import { EconomyManager } from '../economy/EconomyManager';
@@ -22,12 +23,17 @@ import { SurvivalMode } from '../game-modes/SurvivalMode';
 import { MatchEndedEvent, VictoryConditions } from '../game-modes/VictoryConditions';
 import { AccountManager } from '../progression/AccountManager';
 import { CurrencyManager } from '../progression/CurrencyManager';
+import { MarketManager } from '../progression/MarketManager';
 import { RewardManager } from '../progression/RewardManager';
 import { SaveManager } from '../progression/SaveManager';
-import { MatchConfig } from '../types';
+import { CommanderId, DifficultyId, FactionId, MapId, MatchConfig, MatchStats } from '../types';
 import { CardPanel } from '../ui/CardPanel';
+import { GameOverScreen } from '../ui/GameOverScreen';
 import { HUD } from '../ui/HUD';
+import { MainMenu } from '../ui/MainMenu';
+import { MarketScreen } from '../ui/MarketScreen';
 import { Minimap } from '../ui/Minimap';
+import { PrepScreen } from '../ui/PrepScreen';
 import { ResourcePanel } from '../ui/ResourcePanel';
 import { UnitManager } from '../units/UnitManager';
 import { ModifierRegistry } from '../units/UnitStats';
@@ -63,6 +69,7 @@ export class Game {
   private modifierRegistry: ModifierRegistry;
   private commanderManager: CommanderManager;
   private difficultyManager: DifficultyManager;
+  private marketManager: MarketManager;
 
   // Maç içi aktif varlıklar ve sistemler
   private map: GameMap | null = null;
@@ -86,12 +93,21 @@ export class Game {
   private survivalMode: SurvivalMode | null = null;
   private rewardManager: RewardManager | null = null;
 
-  // Arayüz bileşenleri (SPEC S6)
+  // Mevcut maç konfigürasyonu
+  private currentConfig: MatchConfig | null = null;
+
+  // Arayüz bileşenleri
   private uiLayer: HTMLElement | null = null;
   private resourcePanel: ResourcePanel | null = null;
   private hud: HUD | null = null;
   private cardPanel: CardPanel | null = null;
   private minimap: Minimap | null = null;
+
+  // Menü ve akış ekranları (SPEC S1)
+  private mainMenu: MainMenu | null = null;
+  private prepScreen: PrepScreen | null = null;
+  private marketScreen: MarketScreen | null = null;
+  private gameOverScreen: GameOverScreen | null = null;
 
   // Aktif simülasyon sistemleri listesi (endMatch'te temizlenir)
   private activeSystems: UpdatableSystem[] = [];
@@ -130,6 +146,11 @@ export class Game {
     );
     this.difficultyManager = new DifficultyManager();
     this.resourceManager = new ResourceManager(this.eventManager);
+    this.marketManager = new MarketManager(
+      this.currencyManager,
+      this.collectionManager,
+      this.accountManager
+    );
 
     // Pencere yeniden boyutlanmasında kamerayı güncelle
     this.sceneManager.onResize((width: number, height: number) => {
@@ -146,10 +167,126 @@ export class Game {
     });
   }
 
+  // SPEC S1 & S2: Ana Menü
+  public showMainMenu(): void {
+    this.hideAllScreens();
+    const appContainer = this.canvas.parentElement || document.body;
+
+    this.mainMenu = new MainMenu(
+      appContainer,
+      this.currencyManager.getGold(),
+      () => {
+        this.showPrepScreen();
+      },
+      () => {
+        this.showMarketScreen('menu');
+      }
+    );
+  }
+
+  // SPEC S1 & S3: Sefer Hazırlığı Ekranı
+  public showPrepScreen(): void {
+    this.hideAllScreens();
+    const appContainer = this.canvas.parentElement || document.body;
+
+    this.prepScreen = new PrepScreen(
+      appContainer,
+      this.deckManager,
+      this.collectionManager,
+      this.accountManager,
+      (mapId: MapId, difficultyId: DifficultyId, commanderId: CommanderId | null) => {
+        this.startMatchFromPrep(mapId, difficultyId, commanderId);
+      },
+      () => {
+        this.showMarketScreen('prep');
+      },
+      () => {
+        this.showMainMenu();
+      }
+    );
+  }
+
+  // SPEC S1 & S6: Market Ekranı
+  public showMarketScreen(fromScreen: 'menu' | 'prep' = 'menu'): void {
+    this.hideAllScreens();
+    const appContainer = this.canvas.parentElement || document.body;
+
+    this.marketScreen = new MarketScreen(
+      appContainer,
+      this.marketManager,
+      this.currencyManager,
+      () => {
+        if (fromScreen === 'prep') {
+          this.showPrepScreen();
+        } else {
+          this.showMainMenu();
+        }
+      }
+    );
+  }
+
+  // SPEC S4: Sefer Hazırlığından maçı başlatma
+  private startMatchFromPrep(
+    mapId: MapId,
+    difficultyId: DifficultyId,
+    commanderId: CommanderId | null
+  ): void {
+    this.hideAllScreens();
+
+    const isCehennem = difficultyId === 'cehennem';
+    const seed = Math.floor(Math.random() * 1000000);
+
+    const playerFactionId: FactionId = isCehennem
+      ? HELL_FACTIONS.player
+      : DEFAULT_PLAYER_FACTION;
+
+    const enemyFactionId: FactionId = isCehennem
+      ? HELL_FACTIONS.enemy
+      : ENEMY_IDS[Math.floor(Math.random() * ENEMY_IDS.length)];
+
+    const playerCommanderId: CommanderId | null = isCehennem ? null : commanderId;
+    const enemyCommanderId: CommanderId | null = isCehennem
+      ? null
+      : this.commanderManager.pickRandomEnemyCommander(seed);
+
+    const matchConfig: MatchConfig = {
+      mapId,
+      difficultyId,
+      playerCommanderId,
+      playerFactionId,
+      enemyFactionId,
+      enemyCommanderId,
+      seed,
+    };
+
+    this.startMatch(matchConfig);
+  }
+
+  private hideAllScreens(): void {
+    if (this.mainMenu) {
+      this.mainMenu.destroy();
+      this.mainMenu = null;
+    }
+    if (this.prepScreen) {
+      this.prepScreen.destroy();
+      this.prepScreen = null;
+    }
+    if (this.marketScreen) {
+      this.marketScreen.destroy();
+      this.marketScreen = null;
+    }
+    if (this.gameOverScreen) {
+      this.gameOverScreen.destroy();
+      this.gameOverScreen = null;
+    }
+  }
+
   // SPEC S1: Game.startMatch(config: MatchConfig)
   public startMatch(config: MatchConfig, autoPlayer: boolean = false): void {
     // 1. Önceki maçı temizle
     this.endMatch();
+    this.hideAllScreens();
+    this.currentConfig = config;
 
     // 2. MapGenerator.generate(MAPS[mapId], seed) ve validateMap
     const mapDef = MAPS[config.mapId];
@@ -402,23 +539,66 @@ export class Game {
       this.eventManager
     );
 
-    // Maç bitiş olayını dinle
+    // Maç bitiş olayını dinle (SPEC S5)
     this.onMatchEndedBound = async ({
       result,
       survivalTimeSec,
     }: MatchEndedEvent) => {
+      let isNewRecord = false;
       if (this.survivalMode?.isActive()) {
-        await this.survivalMode.handleMatchEnd(survivalTimeSec);
+        const res = await this.survivalMode.handleMatchEnd(survivalTimeSec);
+        isNewRecord = res.isNewRecord;
       }
+      let finalStats: MatchStats | null = null;
       if (this.rewardManager) {
-        await this.rewardManager.finalizeMatch(result, survivalTimeSec);
+        finalStats = await this.rewardManager.finalizeMatch(result, survivalTimeSec);
       }
       this.endMatchClock();
+
+      if (this.currentConfig && finalStats) {
+        const isCehennemMode = this.currentConfig.difficultyId === 'cehennem';
+        const bestRecordSec = this.accountManager.getSurvivalRecord(this.currentConfig.mapId);
+
+        // Arayüz bileşenlerini temizle
+        if (this.resourcePanel) {
+          this.resourcePanel.destroy();
+          this.resourcePanel = null;
+        }
+        if (this.hud) {
+          this.hud.destroy();
+          this.hud = null;
+        }
+        if (this.cardPanel) {
+          this.cardPanel.destroy();
+          this.cardPanel = null;
+        }
+        if (this.minimap) {
+          this.minimap.destroy();
+          this.minimap = null;
+        }
+
+        const appContainer = this.canvas.parentElement || document.body;
+        this.gameOverScreen = new GameOverScreen(
+          appContainer,
+          result,
+          isCehennemMode,
+          finalStats,
+          isNewRecord,
+          bestRecordSec,
+          () => {
+            this.endMatch();
+            this.showMarketScreen('menu');
+          },
+          () => {
+            this.endMatch();
+            this.showMainMenu();
+          }
+        );
+      }
     };
     this.eventManager.on('matchEnded', this.onMatchEndedBound);
 
-    // 15. Sistemleri registerSystem ile şu update sırasıyla kaydet:
-    // EconomyManager, ConstructionManager, ProductionManager, EnemyAI, BattleAI, UnitManager, CombatManager, CommanderAbilities, FogOfWar, VictoryConditions [EK]
+    // 15. Sistemleri registerSystem ile kaydet
     this.registerGameSystem(this.economyManager);
     this.registerGameSystem(this.constructionManager);
     this.registerGameSystem(this.productionManager);
@@ -437,7 +617,7 @@ export class Game {
     this.matchPhaseManager.startMatch();
     this.startMatchClock();
 
-    // 17. SPEC S6: Maç içi arayüz bileşenlerini oluştur
+    // 17. Maç içi arayüz bileşenlerini oluştur
     const appContainer = this.canvas.parentElement || document.body;
     this.uiLayer = document.createElement('div');
     this.uiLayer.className = 'ui-layer';
@@ -485,7 +665,7 @@ export class Game {
     this.timeManager.reset();
     this.matchPhaseManager.reset();
 
-    // SPEC S6: Arayüz bileşenlerini temizle
+    // Arayüz bileşenlerini temizle
     if (this.resourcePanel) {
       this.resourcePanel.destroy();
       this.resourcePanel = null;
@@ -507,6 +687,11 @@ export class Game {
         this.uiLayer.parentElement.removeChild(this.uiLayer);
       }
       this.uiLayer = null;
+    }
+
+    if (this.gameOverScreen) {
+      this.gameOverScreen.destroy();
+      this.gameOverScreen = null;
     }
 
     if (this.onMatchEndedBound) {
@@ -659,6 +844,10 @@ export class Game {
     return this.difficultyManager;
   }
 
+  public getMarketManager(): MarketManager {
+    return this.marketManager;
+  }
+
   public getResourceManager(): ResourceManager {
     return this.resourceManager;
   }
@@ -700,6 +889,7 @@ export class Game {
   }
 
   public destroy(): void {
+    this.hideAllScreens();
     this.endMatch();
     this.gameLoop.stop();
     this.cameraController.destroy();
