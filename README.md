@@ -1,11 +1,13 @@
-<div align="center">
+# Kart Tabanlı Strateji Oyunu
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+## Tanıtım
+Tarayıcıda çalışan, 3D, kart tabanlı gerçek zamanlı bir strateji oyunu; ekonomi ve üs geliştirme, otomatik asker savaşları ve kart destesi mekaniklerini birleştirir; tek oyunculu, bilgisayara karşı.
 
-  <h1>Built with AI Studio</h2>
+## Teknolojiler
+- Three.js
+- TypeScript
+- Vite
+- HTML5 & CSS3
 
-  <p>The fastest path from prompt to production with Gemini.</p>
-
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+## Canlı Oyun
+Bağlantı: yayından sonra eklenecek

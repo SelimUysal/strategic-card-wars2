@@ -1,0 +1,488 @@
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body {
+  background-color: #121214;
+  color: #f3f4f6;
+}
+
+/* Kök arayüz katmanı */
+.ui-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+/* S2: ResourcePanel */
+.resource-panel {
+  pointer-events: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  background: rgba(18, 18, 20, 0.88);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.resource-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.resource-gold {
+  color: #fbbf24;
+}
+
+.resource-wood {
+  color: #34d399;
+}
+
+.resource-pop {
+  color: #60a5fa;
+}
+
+.resource-worker {
+  color: #f472b6;
+}
+
+.resource-soldier {
+  color: #f87171;
+}
+
+/* S3: HUD Üst Çubuk */
+.hud-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+  gap: 8px;
+}
+
+.hud-hq-box {
+  pointer-events: auto;
+  background: rgba(18, 18, 20, 0.88);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 6px 12px;
+  min-width: 140px;
+}
+
+.hud-hq-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #9ca3af;
+  margin-bottom: 3px;
+}
+
+.hud-hp-bar-bg {
+  width: 100%;
+  height: 10px;
+  background: #374151;
+  border-radius: 5px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hud-hp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #059669);
+  transition: width 0.2s ease;
+}
+
+.hud-hp-bar-text {
+  font-size: 11px;
+  margin-top: 2px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #e5e7eb;
+}
+
+.hud-center-info {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: rgba(18, 18, 20, 0.88);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.hud-time-speed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-speed-badge {
+  background: #374151;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #93c5fd;
+}
+
+.hud-commanders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+}
+
+.hud-enemy-team {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hud-team-color-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.hud-actions {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: #1f2937;
+  color: #f9fafb;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.hud-btn:hover {
+  background: #374151;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.hud-btn:active {
+  background: #4b5563;
+}
+
+.hud-btn-exit {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+}
+
+.hud-btn-exit:hover {
+  background: #991b1b;
+}
+
+/* Çıkış onay modalı */
+.hud-modal-overlay {
+  pointer-events: auto;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.hud-modal-box {
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 12px;
+  max-width: 400px;
+  width: 90%;
+  padding: 20px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.hud-modal-text {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+  color: #e4e4e7;
+}
+
+.hud-modal-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.hud-modal-btn-confirm {
+  min-height: 44px;
+  padding: 0 16px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hud-modal-btn-confirm:hover {
+  background: #b91c1c;
+}
+
+.hud-modal-btn-cancel {
+  min-height: 44px;
+  padding: 0 16px;
+  background: #3f3f46;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hud-modal-btn-cancel:hover {
+  background: #52525b;
+}
+
+/* S4: CardPanel */
+.card-panel-container {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.card-list {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.game-card {
+  min-width: 100px;
+  max-width: 125px;
+  min-height: 105px;
+  background: #18181b;
+  border: 2px solid #3f3f46;
+  border-radius: 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  touch-action: none;
+  position: relative;
+  transition: transform 0.1s, border-color 0.15s, opacity 0.2s;
+  box-sizing: border-box;
+}
+
+.game-card:hover {
+  border-color: #60a5fa;
+  transform: translateY(-2px);
+}
+
+.game-card.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(40%);
+}
+
+.game-card.disabled:hover {
+  transform: none;
+  border-color: #3f3f46;
+}
+
+.game-card.dragging {
+  opacity: 0.2;
+}
+
+.game-card-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f3f4f6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-card-role {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 1px;
+}
+
+.game-card-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.game-card-queue-box {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.game-card-queue-text {
+  font-size: 10px;
+  color: #93c5fd;
+  display: flex;
+  justify-content: space-between;
+}
+
+.game-card-progress-bar {
+  width: 100%;
+  height: 5px;
+  background: #374151;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.game-card-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+}
+
+.game-card-stop-btn {
+  min-height: 24px;
+  margin-top: 4px;
+  background: #991b1b;
+  color: #fef2f2;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.game-card-stop-btn:hover {
+  background: #b91c1c;
+}
+
+.game-card-cost {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #e5e7eb;
+}
+
+/* İşçi butonları paneli */
+.worker-buttons-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.worker-btn {
+  min-height: 48px;
+  min-width: 110px;
+  background: #27272a;
+  border: 1px solid #52525b;
+  border-radius: 8px;
+  color: #f3f4f6;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  touch-action: manipulation;
+  transition: background 0.15s, opacity 0.2s;
+}
+
+.worker-btn:hover {
+  background: #3f3f46;
+}
+
+.worker-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.worker-btn-name {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.worker-btn-cost {
+  font-size: 10px;
+  color: #fbbf24;
+  margin-top: 1px;
+}
+
+/* S5: Minimap */
+.minimap-wrapper {
+  pointer-events: auto;
+  position: absolute;
+  right: 12px;
+  bottom: 125px;
+  background: rgba(18, 18, 20, 0.9);
+  border: 2px solid #52525b;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.minimap-canvas {
+  display: block;
+  border-radius: 4px;
+}

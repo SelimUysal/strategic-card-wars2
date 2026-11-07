@@ -1,0 +1,138 @@
+import { Team, TilePos, UnitId } from '../types';
+
+export type UnitState = 'idle' | 'moving' | 'attacking' | 'gathering' | 'dead';
+export type UnitMode = 'waiting' | 'attack';
+
+export class Unit {
+  public readonly kind: 'unit' = 'unit';
+  public id: string;
+  public defId: UnitId;
+  public team: Team;
+  public hp: number;
+  public maxHp: number;
+  public pos: { x: number; y: number };
+  public state: UnitState;
+  public path: TilePos[];
+  public pathIndex: number;
+  public lastAttackerId: string | null;
+  public attackCooldown: number;
+  public mode: UnitMode;
+
+  // Çizim ve yönelim için ek durum
+  public rotationY: number = 0;
+  public deathTimer: number = 0; // Ölürken küçülme animasyonu için
+
+  constructor(params: {
+    id: string;
+    defId: UnitId;
+    team: Team;
+    maxHp: number;
+    pos: { x: number; y: number };
+    hp?: number;
+  }) {
+    this.id = params.id;
+    this.defId = params.defId;
+    this.team = params.team;
+    this.maxHp = params.maxHp;
+    this.hp = params.hp !== undefined ? params.hp : params.maxHp;
+    this.pos = { x: params.pos.x, y: params.pos.y };
+    this.state = 'idle';
+    this.path = [];
+    this.pathIndex = 0;
+    this.lastAttackerId = null;
+    this.attackCooldown = 0;
+    this.mode = 'waiting';
+  }
+
+  // SPEC S2: Hareket: path boyunca, etkin moveSpeed x dt ile ilerler; karelerin merkezlerinden geçer
+  public updateMovement(dt: number, effectiveMoveSpeed: number): void {
+    if (this.state !== 'moving' || this.path.length === 0) return;
+
+    if (this.pathIndex >= this.path.length) {
+      this.state = 'idle';
+      this.path = [];
+      this.pathIndex = 0;
+      return;
+    }
+
+    const targetTile = this.path[this.pathIndex];
+    // Karenin merkezi: tile.x + 0.5, tile.y + 0.5
+    const targetX = targetTile.x + 0.5;
+    const targetY = targetTile.y + 0.5;
+
+    const dx = targetX - this.pos.x;
+    const dy = targetY - this.pos.y;
+    const dist = Math.hypot(dx, dy);
+
+    // Birimin dönme açısını güncelle (XZ düzleminde hareket)
+    if (dist > 0.001) {
+      this.rotationY = Math.atan2(dx, dy);
+    }
+
+    const step = effectiveMoveSpeed * dt;
+
+    if (dist <= step) {
+      // Hedef karenin merkezine ulaşıldı
+      this.pos.x = targetX;
+      this.pos.y = targetY;
+      this.pathIndex++;
+
+      if (this.pathIndex >= this.path.length) {
+        this.state = 'idle';
+        this.path = [];
+        this.pathIndex = 0;
+      }
+    } else {
+      this.pos.x += (dx / dist) * step;
+      this.pos.y += (dy / dist) * step;
+    }
+  }
+
+  public setPath(path: TilePos[]): void {
+    if (!path || path.length === 0) {
+      this.path = [];
+      this.pathIndex = 0;
+      if (this.state === 'moving') this.state = 'idle';
+      return;
+    }
+
+    this.path = path;
+    // Eğer birim zaten ilk karenin merkezindeyse veya hemen yanındaysa sonraki adımdan başla
+    const firstTile = path[0];
+    const distToFirst = Math.hypot(
+      firstTile.x + 0.5 - this.pos.x,
+      firstTile.y + 0.5 - this.pos.y
+    );
+    this.pathIndex = distToFirst < 0.2 && path.length > 1 ? 1 : 0;
+    this.state = 'moving';
+  }
+
+  // SPEC S2: takeDamage(amount, sourceId): hp azaltır, lastAttackerId'yi günceller, ölüp ölmediğini döndürür
+  public takeDamage(amount: number, sourceId: string): boolean {
+    if (this.state === 'dead') return true;
+
+    this.hp = Math.max(0, this.hp - amount);
+    this.lastAttackerId = sourceId;
+
+    if (this.hp <= 0) {
+      this.state = 'dead';
+      return true;
+    }
+    return false;
+  }
+
+  // SPEC S6: entity.getCenter(), entity.getRect() (birim için 1x1 kare)
+  public getCenter(): { x: number; y: number } {
+    return { x: this.pos.x, y: this.pos.y };
+  }
+
+  public getRect(): { x: number; y: number; w: number; h: number } {
+    // 1x1 kare
+    return {
+      x: Math.floor(this.pos.x),
+      y: Math.floor(this.pos.y),
+      w: 1,
+      h: 1,
+    };
+  }
+}
