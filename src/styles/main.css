@@ -338,16 +338,24 @@ body {
   background: #52525b;
 }
 
-/* S4: CardPanel */
+/* S4: CardPanel - Ekranın altına sabitlendi */
 .card-panel-container {
   pointer-events: auto;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 8px;
+
+  position: fixed;
+  bottom: 15px;
+  left: 0;
   width: 100%;
+
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+
+  z-index: 100;
 }
 
 .card-list {
