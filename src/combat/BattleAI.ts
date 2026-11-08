@@ -42,8 +42,14 @@ export class BattleAI {
         unit.mode = unit.team === 'player' ? 'attack' : 'waiting';
         this.updateSoldierBehavior(unit, this.matchPhaseManager.getPhase());
       });
+
+      // SPEC S6: Evre geçişinde ('prep' -> 'march' -> 'war') bütün birimlerin eski yolu iptal edilip yeni emir uygulanır
+      this.eventManager.on('phaseChanged', (newPhase: MatchPhase) => {
+        this.handlePhaseChanged(newPhase);
+      });
     }
   }
+
 
   // SPEC S3: Taraf testi (Side Test)
   // bir kare, takımın KENDİ tarafındadır eğer (kare - C) ile (takım karargâh merkezi - C) vektörlerinin iç çarpımı pozitifse
@@ -240,15 +246,41 @@ export class BattleAI {
       );
 
       if (dist > 0.8 && unit.state !== 'moving') {
-        const path = this.pathfinding.findPath(
+        let path = this.pathfinding.findPath(
           { x: Math.floor(unit.pos.x), y: Math.floor(unit.pos.y) },
           slotTile
         );
+        if (!path || path.length === 0) {
+          // SPEC S3: Yol bulunamazsa en yakın ulaşılabilir kareye ilerler
+          path = this.pathfinding.findNearestReachablePathTowards(
+            { x: Math.floor(unit.pos.x), y: Math.floor(unit.pos.y) },
+            slotTile
+          );
+        }
         if (path && path.length > 0) {
           unit.setPath(path);
         }
       }
     }
+  }
+
+  // SPEC S6: Evre geçişinde ('prep' -> 'march' -> 'war') bütün birimlerin eski yolu iptal edilip yeni emir uygulanır
+  private handlePhaseChanged(newPhase: MatchPhase): void {
+    const allUnits = this.unitManager.getUnits();
+    for (const unit of allUnits) {
+      if (unit.state === 'dead' || UNITS[unit.defId]?.tags.includes('worker')) continue;
+      unit.setPath([]);
+      if (unit.state === 'moving' || unit.state === 'attacking') {
+        unit.state = 'idle';
+      }
+      if (newPhase === 'war') {
+        unit.mode = 'attack';
+      } else {
+        unit.mode = unit.team === 'player' ? 'attack' : 'waiting';
+      }
+    }
+    this.unitSlots.clear();
+    this.updateTimer = this.AI_INTERVAL_SEC;
   }
 
   // SPEC S5(c): 'war' evresinde 'attack' modundaki askerlerin saldırı davranışı
@@ -264,11 +296,21 @@ export class BattleAI {
         const enemyHqTile = enemyTeam === 'player' ? this.map.playerStart : this.map.enemyStart;
         const enemyHqRect = { x: enemyHqTile.x, y: enemyHqTile.y, w: 6, h: 6 };
 
-        const path = this.pathfinding.findPathToRect(
+        let path = this.pathfinding.findPathToRect(
           { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
           enemyHqRect,
           1
         );
+        if (!path || path.length === 0) {
+          // SPEC S3: HQ'ya tam yol yoksa en yakın ulaşılabilir kareye ilerle
+          path = this.pathfinding.findNearestReachablePathTowards(
+            { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
+            {
+              x: Math.floor(enemyHqRect.x + enemyHqRect.w / 2),
+              y: Math.floor(enemyHqRect.y + enemyHqRect.h / 2),
+            }
+          );
+        }
         if (path && path.length > 0) {
           soldier.setPath(path);
         }

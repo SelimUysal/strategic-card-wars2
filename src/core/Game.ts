@@ -1,3 +1,4 @@
+import { AudioManager } from '../audio/AudioManager';
 import { EnemyAI, EnemyAIDependencies } from '../ai/EnemyAI';
 import { BuildingManager } from '../buildings/BuildingManager';
 import { ConstructionManager } from '../buildings/ConstructionManager';
@@ -31,6 +32,8 @@ import { CommanderId, DifficultyId, FactionId, MapId, MatchConfig, MatchStats } 
 import { CardPanel } from '../ui/CardPanel';
 import { GameOverScreen } from '../ui/GameOverScreen';
 import { HUD } from '../ui/HUD';
+import { PauseMenu } from '../ui/PauseMenu';
+import { PhaseBanner } from '../ui/PhaseBanner';
 import { MainMenu } from '../ui/MainMenu';
 import { MarketScreen } from '../ui/MarketScreen';
 import { Minimap } from '../ui/Minimap';
@@ -108,6 +111,8 @@ export class Game {
   private cardPanel: CardPanel | null = null;
   private minimap: Minimap | null = null;
   private worldLabels: WorldLabels | null = null;
+  private pauseMenu: PauseMenu | null = null;
+  private phaseBanner: PhaseBanner | null = null;
 
   // Menü ve akış ekranları (SPEC S1)
   private mainMenu: MainMenu | null = null;
@@ -597,6 +602,14 @@ export class Game {
           this.worldLabels.destroy();
           this.worldLabels = null;
         }
+        if (this.pauseMenu) {
+          this.pauseMenu.destroy();
+          this.pauseMenu = null;
+        }
+        if (this.phaseBanner) {
+          this.phaseBanner.destroy();
+          this.phaseBanner = null;
+        }
 
         const appContainer = this.canvas.parentElement || document.body;
         this.gameOverScreen = new GameOverScreen(
@@ -656,6 +669,92 @@ export class Game {
     );
     this.registerGameSystem(this.effects);
 
+    // SPEC S3 & S4: Ses sistemini maç içi olaylara bağla
+    this.eventManager.on('phaseChanged', ({ phase }: { phase: string }) => {
+      if (phase === 'prep') {
+        AudioManager.getInstance().playMusic('muzik_hazirlik');
+        AudioManager.getInstance().playAmbience('sfx_ortam');
+      } else if (phase === 'march') {
+        AudioManager.getInstance().playSfx('sfx_boru_sefer');
+        AudioManager.getInstance().playMusic('muzik_sefer_marsi');
+      } else if (phase === 'war') {
+        AudioManager.getInstance().playSfx('sfx_boru_savas');
+        const isCehennem = this.currentConfig?.difficultyId === 'cehennem';
+        AudioManager.getInstance().playMusic(isCehennem ? 'muzik_cehennem' : 'muzik_savas');
+      }
+    });
+
+    this.eventManager.on('buildingCompleted', ({ building }: { building: any }) => {
+      if (building && building.team === 'player') {
+        AudioManager.getInstance().playSfx('sfx_insaat_bitti');
+      }
+    });
+
+    this.eventManager.on('unitProduced', ({ unit }: { unit: any }) => {
+      if (unit && unit.team === 'player') {
+        const isWorker = unit.defId === 'altin_madencisi' || unit.defId === 'oduncu';
+        if (isWorker) {
+          AudioManager.getInstance().playSfx('sfx_isci_hazir');
+        } else {
+          AudioManager.getInstance().playSfx('sfx_asker_hazir');
+        }
+      }
+    });
+
+    this.eventManager.on('resourceDeposited', ({ team, type }: { team: string; type: string }) => {
+      if (team === 'player') {
+        if (type === 'gold') {
+          AudioManager.getInstance().playSfx('sfx_teslim_altin');
+        } else if (type === 'wood') {
+          AudioManager.getInstance().playSfx('sfx_teslim_odun');
+        }
+      }
+    });
+
+    this.eventManager.on('attackPerformed', ({ attackerPos, type }: { attackerPos: { x: number; y: number }; type: string }) => {
+      const targetVec = this.cameraController.getTarget();
+      const spatial = {
+        pos: attackerPos,
+        cameraCenter: { x: targetVec.x, y: targetVec.z },
+        fogOfWar: this.fogOfWar || undefined,
+      };
+
+      if (type === 'arrow') {
+        AudioManager.getInstance().playSfx('sfx_ok', spatial);
+      } else if (type === 'cannon' || type === 'ship') {
+        AudioManager.getInstance().playSfx('sfx_top', spatial);
+      } else if (type === 'stone') {
+        AudioManager.getInstance().playSfx('sfx_tas', spatial);
+      } else {
+        AudioManager.getInstance().playSfx('sfx_kilic', spatial);
+      }
+    });
+
+    this.eventManager.on('unitDied', ({ unit }: { unit: any }) => {
+      if (unit && unit.defId !== 'altin_madencisi' && unit.defId !== 'oduncu') {
+        const targetVec = this.cameraController.getTarget();
+        const spatial = {
+          pos: { x: unit.pos.x, y: unit.pos.y },
+          cameraCenter: { x: targetVec.x, y: targetVec.z },
+          fogOfWar: this.fogOfWar || undefined,
+        };
+        AudioManager.getInstance().playSfx('sfx_olum', spatial);
+      }
+    });
+
+    this.eventManager.on('buildingDestroyed', ({ building }: { building: any }) => {
+      if (building) {
+        const center = building.getCenter();
+        const targetVec = this.cameraController.getTarget();
+        const spatial = {
+          pos: { x: center.x, y: center.y },
+          cameraCenter: { x: targetVec.x, y: targetVec.z },
+          fogOfWar: this.fogOfWar || undefined,
+        };
+        AudioManager.getInstance().playSfx('sfx_bina_yikim', spatial);
+      }
+    });
+
     // 16. MatchPhaseManager.'prep' ve startMatchClock()
     this.matchPhaseManager.startMatch();
     this.startMatchClock();
@@ -673,9 +772,21 @@ export class Game {
       this.timeManager,
       this.matchPhaseManager,
       this.commanderManager,
-      this.rewardManager,
       config.difficultyId,
       enemyFaction
+    );
+    this.pauseMenu = new PauseMenu(
+      this.uiLayer,
+      this.timeManager,
+      this.rewardManager,
+      this.eventManager
+    );
+    this.phaseBanner = new PhaseBanner(
+      this.uiLayer,
+      this.timeManager,
+      this.matchPhaseManager,
+      this.eventManager,
+      config.difficultyId
     );
     this.cardPanel = new CardPanel(
       this.uiLayer,
@@ -706,6 +817,7 @@ export class Game {
   // SPEC S3: Game.endMatch()
   // Maç saatini durdur, bütün varlıkları, bonusları, olay abonelikleri ve çizimleri temizle (dispose); sonraki startMatch temiz başlamalı.
   public endMatch(): void {
+    AudioManager.getInstance().stopAll();
     this.endMatchClock();
     this.timeManager.reset();
     this.matchPhaseManager.reset();
@@ -730,6 +842,14 @@ export class Game {
     if (this.worldLabels) {
       this.worldLabels.destroy();
       this.worldLabels = null;
+    }
+    if (this.pauseMenu) {
+      this.pauseMenu.destroy();
+      this.pauseMenu = null;
+    }
+    if (this.phaseBanner) {
+      this.phaseBanner.destroy();
+      this.phaseBanner = null;
     }
     if (this.uiLayer) {
       if (this.uiLayer.parentElement) {

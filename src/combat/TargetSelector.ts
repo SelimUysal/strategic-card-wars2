@@ -1,4 +1,5 @@
 import { BUILDINGS } from '../data/buildings';
+import { MATCH_RULES } from '../data/matchRules';
 import { UNITS } from '../data/units';
 import { TargetCategory, Targeting } from '../types';
 import { Building } from '../buildings/Building';
@@ -10,8 +11,40 @@ export class TargetSelector {
   // Hedef sorgusu için son yenileme zamanlarını tutan eşleme
   private targetTimers: Map<string, number> = new Map();
   private currentTargets: Map<string, string | null> = new Map();
+  // SPEC S3: Ulaşılamayan hedefler için bekleme süreleri (attackerId_targetId -> kalan süre)
+  private unreachableCooldowns: Map<string, number> = new Map();
 
-  // SPEC S2: selectTarget(attacker, enemyUnits, enemyBuildings, dt)
+  // SPEC S3: Hedefi ulaşılamaz olarak işaretle
+  public markUnreachable(
+    attackerId: string,
+    targetId: string,
+    durationSec: number = MATCH_RULES.unreachableTargetSec
+  ): void {
+    const key = `${attackerId}_${targetId}`;
+    this.unreachableCooldowns.set(key, durationSec);
+    if (this.currentTargets.get(attackerId) === targetId) {
+      this.clearTarget(attackerId);
+    }
+  }
+
+  public isUnreachable(attackerId: string, targetId: string): boolean {
+    const key = `${attackerId}_${targetId}`;
+    const rem = this.unreachableCooldowns.get(key);
+    return rem !== undefined && rem > 0;
+  }
+
+  public update(dt: number): void {
+    for (const [key, rem] of this.unreachableCooldowns.entries()) {
+      const next = rem - dt;
+      if (next <= 0) {
+        this.unreachableCooldowns.delete(key);
+      } else {
+        this.unreachableCooldowns.set(key, next);
+      }
+    }
+  }
+
+  // SPEC S2 & S3: selectTarget(attacker, enemyUnits, enemyBuildings, dt)
   public selectTarget(
     attacker: TargetableEntity,
     enemyUnits: Unit[],
@@ -30,6 +63,11 @@ export class TargetSelector {
         enemyUnits.find((u) => u.id === currentTargetId && u.state !== 'dead') ||
         enemyBuildings.find((b) => b.id === currentTargetId && b.state !== 'destroyed') ||
         null;
+    }
+
+    // SPEC S3: Eğer mevcut hedef ulaşılamaz olarak işaretlendiyse bırak
+    if (existingTarget && this.isUnreachable(attacker.id, existingTarget.id)) {
+      existingTarget = null;
     }
 
     // Eğer mevcut hedef canlıysa ve henüz 1 saniyelik yenileme süresi dolmadıysa aynı hedefi koru
@@ -55,12 +93,15 @@ export class TargetSelector {
     const vision = this.getVision(attacker);
     const minRange = this.getMinRange(attacker);
 
-    // Görüş menzili içindeki ve minRange kısıtına uyan adayları filtrele
+    // Görüş menzili içindeki ve minRange kısıtına uyan adayları filtrele (ulaşılamayanlar hariç)
     const candidates: { entity: TargetableEntity; dist: number; categories: TargetCategory[] }[] = [];
 
     // Düşman birimler
     for (const u of enemyUnits) {
       if (u.state === 'dead' || u.team === attacker.team) continue;
+      // SPEC S3: Ulaşılamaz olarak işaretlenmiş hedefi atla
+      if (this.isUnreachable(attacker.id, u.id)) continue;
+
       const dist = this.getDistance(attacker, u);
       if (dist <= vision && dist >= minRange) {
         candidates.push({
@@ -74,6 +115,9 @@ export class TargetSelector {
     // Düşman binalar
     for (const b of enemyBuildings) {
       if (b.state === 'destroyed' || b.team === attacker.team) continue;
+      // SPEC S3: Ulaşılamaz olarak işaretlenmiş binayı atla
+      if (this.isUnreachable(attacker.id, b.id)) continue;
+
       const dist = this.getDistance(attacker, b);
       if (dist <= vision && dist >= minRange) {
         candidates.push({
@@ -83,6 +127,7 @@ export class TargetSelector {
         });
       }
     }
+
 
     let selected: TargetableEntity | null = null;
 

@@ -345,6 +345,11 @@ export class BuildPreview {
     return this.currentValidity ? this.currentValidity.isValid : false;
   }
 
+  // S3: Bırakma başarısızlığı için son geçerlilik verisini ve gerekçesini döndürür
+  public getValidity(): BuildingPlacementValidity | null {
+    return this.currentValidity;
+  }
+
   // S7: Temizlik: bellek sızıntısı kalmaz
   public destroy(): void {
     this.hideVisuals();

@@ -1,10 +1,9 @@
+import { AudioManager } from '../audio/AudioManager';
 import { BuildingManager } from '../buildings/BuildingManager';
 import { CommanderManager } from '../commanders/CommanderManager';
 import { MatchPhaseManager } from '../core/MatchPhaseManager';
 import { TimeManager } from '../core/TimeManager';
 import { MATCH_RULES } from '../data/matchRules';
-import { REWARDS } from '../data/rewards';
-import { RewardManager } from '../progression/RewardManager';
 import { DifficultyId, FactionDef } from '../types';
 
 export class HUD {
@@ -20,8 +19,6 @@ export class HUD {
   private commandersEl: HTMLElement | null = null;
   private playerCommanderEl: HTMLElement | null = null;
   private enemyCommanderEl: HTMLElement | null = null;
-  private pauseResumeBtn: HTMLButtonElement;
-  private exitModalEl: HTMLElement | null = null;
 
   private updateInterval: number | null = null;
 
@@ -31,7 +28,6 @@ export class HUD {
     private timeManager: TimeManager,
     private matchPhaseManager: MatchPhaseManager,
     private commanderManager: CommanderManager,
-    private rewardManager: RewardManager | null,
     private difficultyId: DifficultyId,
     private enemyFaction: FactionDef
   ) {
@@ -78,8 +74,10 @@ export class HUD {
         }
         <div class="hud-actions">
           <button type="button" class="hud-btn" data-action="user-speed">Hızlandır: 1x</button>
-          <button type="button" class="hud-btn" data-action="pause-resume">Duraklat</button>
-          <button type="button" class="hud-btn hud-btn-exit" data-action="exit">Çık</button>
+          <button type="button" class="hud-btn hud-btn-pause" data-action="pause">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            Duraklat
+          </button>
         </div>
       </div>
     `;
@@ -92,7 +90,6 @@ export class HUD {
     this.speedEl = this.element.querySelector('[data-field="speed"]') as HTMLElement;
     this.speedBtn = this.element.querySelector('[data-action="user-speed"]') as HTMLButtonElement;
     this.phaseEl = this.element.querySelector('[data-field="phase"]') as HTMLElement;
-    this.pauseResumeBtn = this.element.querySelector('[data-action="pause-resume"]') as HTMLButtonElement;
 
     if (!isCehennem) {
       this.commandersEl = this.element.querySelector('[data-field="commanders"]');
@@ -101,6 +98,7 @@ export class HUD {
     }
 
     this.speedBtn.addEventListener('click', () => {
+      AudioManager.getInstance().playSfx('sfx_hiz');
       const options = MATCH_RULES.userSpeedOptions;
       const curr = this.timeManager.userSpeed;
       const idx = options.indexOf(curr);
@@ -110,18 +108,10 @@ export class HUD {
       this.update();
     });
 
-    this.pauseResumeBtn.addEventListener('click', () => {
-      if (this.timeManager.paused) {
-        this.timeManager.resume();
-      } else {
-        this.timeManager.pause();
-      }
-      this.updatePauseResumeButton();
-    });
-
-    const exitBtn = this.element.querySelector('[data-action="exit"]') as HTMLButtonElement;
-    exitBtn.addEventListener('click', () => {
-      this.openExitModal();
+    const pauseBtn = this.element.querySelector('[data-action="pause"]') as HTMLButtonElement;
+    pauseBtn.addEventListener('click', () => {
+      AudioManager.getInstance().playSfx('sfx_duraklat');
+      this.timeManager.pause();
     });
 
     this.parent.appendChild(this.element);
@@ -200,58 +190,29 @@ export class HUD {
         this.enemyCommanderEl.textContent = '???';
       }
     }
-
-    // 6. Duraklat / Devam Et düğmesi
-    this.updatePauseResumeButton();
   }
 
-  private updatePauseResumeButton(): void {
-    if (this.timeManager.paused) {
-      this.pauseResumeBtn.textContent = 'Devam Et';
-    } else {
-      this.pauseResumeBtn.textContent = 'Duraklat';
+  /**
+   * S2: Eksik olan kaynağın (Altın ve/veya Odun) değeri 1 sn kırmızı yanıp söner [EK]
+   */
+  public static flashResource(resource: 'gold' | 'wood' | 'both'): void {
+    const selectors: string[] = [];
+    if (resource === 'gold' || resource === 'both') {
+      selectors.push('.resource-gold', '.resource-gold [data-field="gold"]');
     }
-  }
-
-  private openExitModal(): void {
-    if (this.exitModalEl) return;
-
-    this.exitModalEl = document.createElement('div');
-    this.exitModalEl.className = 'hud-modal-overlay';
-    this.exitModalEl.innerHTML = `
-      <div class="hud-modal-box">
-        <div class="hud-modal-text">
-          Savaştan çıkarsan mağlup sayılırsın ve ${REWARDS.exitPenaltyGold} hesap altını kaybedersin. Çıkmak istiyor musun?
-        </div>
-        <div class="hud-modal-buttons">
-          <button type="button" class="hud-modal-btn-confirm" data-action="confirm-exit">Evet, çık</button>
-          <button type="button" class="hud-modal-btn-cancel" data-action="cancel-exit">Vazgeç</button>
-        </div>
-      </div>
-    `;
-
-    const confirmBtn = this.exitModalEl.querySelector('[data-action="confirm-exit"]') as HTMLButtonElement;
-    const cancelBtn = this.exitModalEl.querySelector('[data-action="cancel-exit"]') as HTMLButtonElement;
-
-    confirmBtn.addEventListener('click', async () => {
-      this.closeExitModal();
-      if (this.rewardManager) {
-        await this.rewardManager.exitMatch();
-      }
-    });
-
-    cancelBtn.addEventListener('click', () => {
-      this.closeExitModal();
-    });
-
-    this.parent.appendChild(this.exitModalEl);
-  }
-
-  private closeExitModal(): void {
-    if (this.exitModalEl && this.exitModalEl.parentElement) {
-      this.exitModalEl.parentElement.removeChild(this.exitModalEl);
-      this.exitModalEl = null;
+    if (resource === 'wood' || resource === 'both') {
+      selectors.push('.resource-wood', '.resource-wood [data-field="wood"]');
     }
+    const elements = document.querySelectorAll(selectors.join(', '));
+    elements.forEach((el) => {
+      el.classList.remove('resource-flash-red');
+      // Reflow tetikle
+      void (el as HTMLElement).offsetWidth;
+      el.classList.add('resource-flash-red');
+      window.setTimeout(() => {
+        el.classList.remove('resource-flash-red');
+      }, 1000);
+    });
   }
 
   public destroy(): void {
@@ -259,7 +220,6 @@ export class HUD {
       clearInterval(this.updateInterval);
       this.updateInterval = null;
     }
-    this.closeExitModal();
     if (this.element.parentElement) {
       this.element.parentElement.removeChild(this.element);
     }

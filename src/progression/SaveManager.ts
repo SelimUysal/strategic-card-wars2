@@ -1,14 +1,21 @@
 import { CARDS, DEFAULT_DECK } from '../data/cards';
+import { COMMANDERS } from '../data/commanders';
 import { MATCH_RULES } from '../data/matchRules';
-import { CardId, Profile } from '../types';
+import { CardId, CommanderId, Profile } from '../types';
 
 export const SAVE_SCHEMA_VERSION = 1;
 
 export class SaveManager {
-  private readonly DB_NAME = 'kart-strateji-kayit';
+  private static globalTestMode: boolean = false;
+
+  private readonly DB_NAME_NORMAL = 'kart-strateji-kayit';
+  private readonly DB_NAME_TEST = 'kart-strateji-kayit-test';
   private readonly DB_VERSION = 1;
   private readonly STORE_NAME = 'profile';
   private readonly RECORD_KEY = 'user_profile';
+
+  private isTestMode: boolean = false;
+  private currentDb: IDBDatabase | null = null;
 
   // Bellek içi yedek profil (IndexedDB açılamazsa veya hata durumunda)
   private memoryProfile: Profile | null = null;
@@ -16,8 +23,56 @@ export class SaveManager {
   // Migrations tablosu (yapı hazır, şimdilik boş)
   private migrations: Record<number, (oldData: any) => any> = {};
 
-  // SPEC S8: Varsayılan profil üretici
+  constructor(testMode?: boolean) {
+    if (testMode !== undefined) {
+      this.isTestMode = testMode;
+    } else {
+      this.isTestMode = SaveManager.globalTestMode;
+    }
+  }
+
+  public static setTestMode(enabled: boolean): void {
+    SaveManager.globalTestMode = enabled;
+  }
+
+  public static isTestMode(): boolean {
+    return SaveManager.globalTestMode;
+  }
+
+  public setTestMode(enabled: boolean): void {
+    this.isTestMode = enabled;
+  }
+
+  public isTest(): boolean {
+    return this.isTestMode || SaveManager.globalTestMode;
+  }
+
+  public getDbName(): string {
+    return this.isTest() ? this.DB_NAME_TEST : this.DB_NAME_NORMAL;
+  }
+
+  // SPEC S3: Test profili varsayılan üretici
+  public createDefaultTestProfile(): Profile {
+    const allCards = Object.keys(CARDS) as CardId[];
+    const allCommanders = Object.keys(COMMANDERS) as CommanderId[];
+
+    return {
+      accountGold: 99999,
+      unlockedCards: allCards,
+      unlockedCommanders: allCommanders,
+      deck: [...DEFAULT_DECK],
+      survivalRecords: {},
+      history: [],
+      audioMuted: false,
+    };
+  }
+
+  // SPEC S8 (Normal) & S3 (Test): Varsayılan profil üretici
   public createDefaultProfile(): Profile {
+    if (this.isTest()) {
+      return this.createDefaultTestProfile();
+    }
+
     const startCards: CardId[] = [];
     for (const card of Object.values(CARDS)) {
       if (card.startUnlocked) {
@@ -32,10 +87,11 @@ export class SaveManager {
       deck: [...DEFAULT_DECK],
       survivalRecords: {},
       history: [],
+      audioMuted: false,
     };
   }
 
-  // SPEC S8: load()
+  // SPEC S8 & S3: load()
   public async load(): Promise<Profile> {
     try {
       const db = await this.openDatabase();
@@ -73,7 +129,7 @@ export class SaveManager {
     }
   }
 
-  // SPEC S8: save(profile)
+  // SPEC S8 & S3: save(profile)
   public async save(profile: Profile): Promise<void> {
     this.memoryProfile = { ...profile };
 
@@ -89,6 +145,33 @@ export class SaveManager {
     }
   }
 
+  // SPEC S4: Test veritabanını sil ve S3'teki varsayılan test profilini yeniden oluştur
+  public async resetTestDatabase(): Promise<Profile> {
+    if (!this.isTest()) {
+      throw new Error('Test veritabanı sıfırlama yalnızca test modunda yapılabilir.');
+    }
+
+    if (this.currentDb) {
+      this.currentDb.close();
+      this.currentDb = null;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(this.DB_NAME_TEST);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => {
+        console.warn('Test veritabanı silinirken bloklandı, işleme devam ediliyor');
+        resolve();
+      };
+    });
+
+    const defaultTestProf = this.createDefaultTestProfile();
+    this.memoryProfile = defaultTestProf;
+    await this.save(defaultTestProf);
+    return defaultTestProf;
+  }
+
   private openDatabase(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
       if (typeof indexedDB === 'undefined') {
@@ -96,7 +179,8 @@ export class SaveManager {
         return;
       }
 
-      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+      const dbName = this.getDbName();
+      const request = indexedDB.open(dbName, this.DB_VERSION);
 
       request.onupgradeneeded = () => {
         const db = request.result;
@@ -106,6 +190,7 @@ export class SaveManager {
       };
 
       request.onsuccess = () => {
+        this.currentDb = request.result;
         resolve(request.result);
       };
 

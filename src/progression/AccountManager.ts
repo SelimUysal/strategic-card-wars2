@@ -5,6 +5,7 @@ import { CurrencyManager } from './CurrencyManager';
 import { SaveManager } from './SaveManager';
 
 export class AccountManager {
+  private static instance: AccountManager | null = null;
   private profile: Profile;
 
   constructor(
@@ -13,6 +14,7 @@ export class AccountManager {
     private collectionManager: CollectionManager,
     private deckManager: DeckManager
   ) {
+    AccountManager.instance = this;
     this.profile = this.saveManager.createDefaultProfile();
 
     // Deste değişikliği veya koleksiyon/altın güncellemelerinde kaydı tetikle
@@ -20,6 +22,43 @@ export class AccountManager {
       this.syncFromManagers();
       this.saveManager.save(this.profile);
     });
+  }
+
+  public static getInstance(): AccountManager | null {
+    return AccountManager.instance;
+  }
+
+  public getSaveManager(): SaveManager {
+    return this.saveManager;
+  }
+
+  public setTestMode(enabled: boolean): void {
+    this.saveManager.setTestMode(enabled);
+  }
+
+  // SPEC S4: Test profilini sıfırla
+  public async resetTestProfile(): Promise<Profile> {
+    const defaultProf = await this.saveManager.resetTestDatabase();
+    this.profile = defaultProf;
+
+    this.currencyManager.setGold(this.profile.accountGold);
+    this.collectionManager.setUnlocked(
+      this.profile.unlockedCards,
+      this.profile.unlockedCommanders
+    );
+    this.deckManager.loadDeck(this.profile.deck);
+
+    return this.profile;
+  }
+
+
+  public isAudioMuted(): boolean {
+    return Boolean(this.profile.audioMuted);
+  }
+
+  public async setAudioMuted(muted: boolean): Promise<void> {
+    this.profile.audioMuted = muted;
+    await this.save();
   }
 
   // SPEC S7: load()

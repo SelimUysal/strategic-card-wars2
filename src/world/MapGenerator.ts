@@ -56,6 +56,17 @@ export class MapGenerator {
     const playerCenter: TilePos = { x: playerStart.x + 3, y: playerStart.y + 3 };
     const enemyCenter: TilePos = { x: enemyStart.x + 3, y: enemyStart.y + 3 };
 
+    const isAtLeast5FromHqFootprint = (tx: number, ty: number, hqStart: TilePos): boolean => {
+      const xMin = hqStart.x;
+      const xMax = hqStart.x + 5;
+      const yMin = hqStart.y;
+      const yMax = hqStart.y + 5;
+
+      const dx = Math.max(0, xMin - tx, tx - xMax);
+      const dy = Math.max(0, yMin - ty, ty - yMax);
+      return Math.max(dx, dy) >= 5;
+    };
+
     // Kaynak noktası üretme yardımcısı
     const processNodeGroup = (
       templateList: TilePos[],
@@ -97,6 +108,9 @@ export class MapGenerator {
           const distToHq = Math.hypot(testX - hqCenter.x, testY - hqCenter.y);
           if (distToHq > MATCH_RULES.placementZoneRadius) continue;
 
+          // SPEC S2 & S4: Altın noktası HQ ayak izine en az 5 kare uzaklıkta olmalıdır
+          if (type === 'gold' && !isAtLeast5FromHqFootprint(testX, testY, hqStart)) continue;
+
           const tileType = tiles[testY * width + testX];
           if (tileType !== expectedType) continue;
 
@@ -107,7 +121,7 @@ export class MapGenerator {
           break;
         }
 
-        // 20 denemede de bulunamadıysa şablon konumu kullanılır
+        // 20 denemede de bulunamadıysa şablon konumu kullanılır (şablon koşulu sağlıyorsa)
         if (!found) {
           chosenX = template.x;
           chosenY = template.y;
@@ -215,6 +229,29 @@ export class MapGenerator {
         throw new Error(
           `Harita doğrulama hatası: Kaynak noktası sayıları şablonla uyuşmuyor! Beklenen: P(G:${expPlayerGold}, W:${expPlayerWood}) E(G:${expEnemyGold}, W:${expEnemyWood}), Üretilen: P(G:${actPlayerGold}, W:${actPlayerWood}) E(G:${actEnemyGold}, W:${actEnemyWood})`
         );
+      }
+
+      // 3. Altın noktaları HQ ayak izine en az 5 kare uzaklık kontrolü (SPEC S4)
+      const isAtLeast5FromHqFootprint = (tx: number, ty: number, hqStart: TilePos): boolean => {
+        const xMin = hqStart.x;
+        const xMax = hqStart.x + 5;
+        const yMin = hqStart.y;
+        const yMax = hqStart.y + 5;
+
+        const dx = Math.max(0, xMin - tx, tx - xMax);
+        const dy = Math.max(0, yMin - ty, ty - yMax);
+        return Math.max(dx, dy) >= 5;
+      };
+
+      for (const node of map.nodes) {
+        if (node.type === 'gold') {
+          const hqStart = node.team === 'player' ? mapDef.playerStart : mapDef.enemyStart;
+          if (!isAtLeast5FromHqFootprint(node.tile.x, node.tile.y, hqStart)) {
+            throw new Error(
+              `Harita doğrulama hatası: ${node.team} tarafına ait altın noktası (${node.tile.x}, ${node.tile.y}) ana karargâh ayak izine 5 kareden daha yakın!`
+            );
+          }
+        }
       }
     }
   }

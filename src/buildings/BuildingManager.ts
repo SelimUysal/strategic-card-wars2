@@ -137,6 +137,9 @@ export class BuildingManager {
   public removeBuilding(building: Building): void {
     if (!this.buildings.has(building.id)) return;
 
+    // S4: Bina durumu 'destroyed' yapılır
+    building.state = 'destroyed';
+
     // D3: Kareleri hemen yürünebilir/inşa edilebilir yap (enkaz kuralları etkilemez)
     this.pathfinding.unblockRect(building.getRect());
 
@@ -167,6 +170,18 @@ export class BuildingManager {
         this.eventManager.emit('hqDestroyed', { team: building.team, building });
       }
     }
+  }
+
+  // S4: Bina yıkımını dinlemek isteyen sistemler için olay bağlayıcı
+  public onBuildingDestroyed(callback: (building: Building) => void): () => void {
+    if (this.eventManager) {
+      const handler = ({ building }: { building: Building }) => callback(building);
+      this.eventManager.on('buildingDestroyed', handler);
+      return () => {
+        this.eventManager?.off('buildingDestroyed', handler);
+      };
+    }
+    return () => {};
   }
 
   // SPEC S5: getBuildings(team)

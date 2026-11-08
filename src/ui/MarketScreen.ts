@@ -1,3 +1,4 @@
+import { AudioManager } from '../audio/AudioManager';
 import { CurrencyManager } from '../progression/CurrencyManager';
 import { MarketManager } from '../progression/MarketManager';
 
@@ -13,6 +14,9 @@ export class MarketScreen {
     private currencyManager: CurrencyManager,
     private onBack: () => void
   ) {
+    // Menü müziği (SPEC S3)
+    AudioManager.getInstance().playMusic('muzik_menu');
+
     this.element = document.createElement('div');
     this.element.className = 'fullscreen-screen-overlay';
 
@@ -44,6 +48,7 @@ export class MarketScreen {
 
     const backBtn = this.element.querySelector('[data-action="back"]') as HTMLButtonElement;
     backBtn.addEventListener('click', () => {
+      AudioManager.getInstance().playSfx('sfx_tikla');
       this.onBack();
     });
 
@@ -94,7 +99,10 @@ export class MarketScreen {
           buyBtn.addEventListener('click', async () => {
             const res = await this.marketManager.buyCard(item.card.id);
             if (res.ok) {
+              AudioManager.getInstance().playSfx('sfx_satin_al');
               this.render();
+            } else {
+              AudioManager.getInstance().playSfx('sfx_hata');
             }
           });
         }
@@ -144,7 +152,10 @@ export class MarketScreen {
           buyBtn.addEventListener('click', async () => {
             const res = await this.marketManager.buyCommander(item.commander.id);
             if (res.ok) {
+              AudioManager.getInstance().playSfx('sfx_satin_al');
               this.render();
+            } else {
+              AudioManager.getInstance().playSfx('sfx_hata');
             }
           });
         }

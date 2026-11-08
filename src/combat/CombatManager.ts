@@ -1,8 +1,9 @@
+import { MATCH_RULES } from '../data/matchRules';
 import { EventManager } from '../core/EventManager';
 import { MatchPhaseManager } from '../core/MatchPhaseManager';
 import { BUILDINGS } from '../data/buildings';
 import { UNITS } from '../data/units';
-import { Team } from '../types';
+import { Team, TilePos } from '../types';
 import { Building } from '../buildings/Building';
 import { BuildingManager } from '../buildings/BuildingManager';
 import { Unit } from '../units/Unit';
@@ -31,10 +32,19 @@ export class CombatManager {
     return this.targetSelector;
   }
 
-  // SPEC S3 & S5: update(dt)
+  // SPEC S3 & S5 & S6: update(dt)
   public update(dt: number): void {
+    // S3: Ulaşılamaz hedef sayaçlarını güncelle
+    this.targetSelector.update(dt);
+
     // Savaş izni kontrolü (MatchPhaseManager.isCombatAllowed() false iken HİÇBİR saldırı yapılmaz)
     if (!this.matchPhaseManager.isCombatAllowed()) {
+      // S6: Savaş izni yoksa saldırmakta olan birimler idle durumuna geçer
+      for (const u of this.unitManager.getUnits()) {
+        if (u.state === 'attacking') {
+          u.state = 'idle';
+        }
+      }
       return;
     }
 
@@ -57,12 +67,33 @@ export class CombatManager {
       // Cooldown azaltımı
       attacker.attackCooldown = Math.max(0, attacker.attackCooldown - dt);
 
+      // S4: Hareket halindeki birimler için bekçi (watchdog) kontrolü
+      if (attacker.kind === 'unit') {
+        const u = attacker as Unit;
+        const watchdog = u.checkWatchdog(dt, MATCH_RULES.stuckTimeoutSec);
+        if (watchdog.isStuck) {
+          if (watchdog.retryCount === 1) {
+            // İlk kez takıldı: yolu yeniden hesapla
+            this.pathUpdateTimers.set(u.id, 999);
+          } else {
+            // Yine ilerlemedi: mevcut hedef ulaşılamaz sayılır (S3)
+            if (u.currentTargetId) {
+              this.targetSelector.markUnreachable(u.id, u.currentTargetId, MATCH_RULES.unreachableTargetSec);
+              this.targetSelector.clearTarget(u.id);
+              u.currentTargetId = null;
+            }
+            u.setPath([]);
+            u.state = 'idle';
+          }
+        }
+      }
+
       // Düşman listeleri
       const enemyTeam: Team = attacker.team === 'player' ? 'enemy' : 'player';
       const enemyUnits = allUnits.filter((u) => u.team === enemyTeam && u.state !== 'dead');
       const enemyBuildings = allBuildings.filter((b) => b.team === enemyTeam && b.state !== 'destroyed');
 
-      // Hedef seçimi (SPEC S2)
+      // Hedef seçimi (SPEC S2 & S3)
       const target = this.targetSelector.selectTarget(
         attacker,
         enemyUnits,
@@ -70,6 +101,11 @@ export class CombatManager {
         dt
       );
 
+      if (attacker.kind === 'unit') {
+        (attacker as Unit).currentTargetId = target ? target.id : null;
+      }
+
+      // S6: Hedef yoksa veya öldüyse 'attacking' durumundan çık
       if (!target) {
         if (attacker.kind === 'unit' && (attacker as Unit).state === 'attacking') {
           (attacker as Unit).state = 'idle';
@@ -102,14 +138,18 @@ export class CombatManager {
           attacker.attackCooldown = this.getAttackInterval(attacker);
         }
       } else {
-        // Menzil dışındaysa: yalnızca hareketli birimler hedefe doğru yürür
+        // Menzil dışındaysa: S6 durum makinesi çıkışı: attacking durumundan çık ve hedefe doğru yürü
         if (attacker.kind === 'unit') {
           const u = attacker as Unit;
-          this.moveTowardsTarget(u, target, range, dt);
+          if (u.state === 'attacking') {
+            u.state = 'idle';
+          }
+          this.moveTowardsTarget(u, target, enemyUnits, enemyBuildings, range, dt);
         }
       }
     }
   }
+
 
   private executeAttack(
     attacker: TargetableEntity,
@@ -209,6 +249,11 @@ export class CombatManager {
       } else {
         const b = target as Building;
 
+        // S4 g: Yıkılan savunma yapısı ateş etmeyi derhal bırakır, hedef ve zamanlayıcı temizlenir
+        b.state = 'destroyed';
+        this.targetSelector.clearTarget(b.id);
+        this.pathUpdateTimers.delete(b.id);
+
         // Binayı kaldır (BuildingManager yıkılınca ve hq yıkılınca olayları yönetir)
         this.buildingManager.removeBuilding(b);
 
@@ -225,6 +270,8 @@ export class CombatManager {
   private moveTowardsTarget(
     unit: Unit,
     target: TargetableEntity,
+    enemyUnits: Unit[],
+    enemyBuildings: Building[],
     range: number,
     dt: number
   ): void {
@@ -241,9 +288,51 @@ export class CombatManager {
       const path = this.pathfinding.findPathToRect(startTile, target.getRect(), Math.max(1, Math.floor(range)));
       if (path && path.length > 0) {
         unit.setPath(path);
+      } else {
+        // SPEC S3: Yol bulunamazsa (null) birim donmaz:
+        // Hedef MATCH_RULES.unreachableTargetSec (5 sn) boyunca ulaşılamaz sayılır, sıradaki aday seçilir;
+        this.targetSelector.markUnreachable(unit.id, target.id, MATCH_RULES.unreachableTargetSec);
+        this.targetSelector.clearTarget(unit.id);
+        unit.currentTargetId = null;
+
+        const nextTarget = this.targetSelector.selectTarget(unit, enemyUnits, enemyBuildings, 0);
+        if (nextTarget) {
+          unit.currentTargetId = nextTarget.id;
+          const nextRange = Math.max(1, Math.floor(this.getRange(unit)));
+          const nextPath = this.pathfinding.findPathToRect(startTile, nextTarget.getRect(), nextRange);
+          if (nextPath && nextPath.length > 0) {
+            unit.setPath(nextPath);
+            return;
+          }
+        }
+
+        // SPEC S3: Aday yoksa düşman ana karargâhına gitmeyi dener;
+        const enemyTeam: Team = unit.team === 'player' ? 'enemy' : 'player';
+        const enemyHq = this.buildingManager.getHq(enemyTeam);
+        let hqPath: TilePos[] | null = null;
+        if (enemyHq && enemyHq.state !== 'destroyed') {
+          hqPath = this.pathfinding.findPathToRect(startTile, enemyHq.getRect(), 1);
+        }
+        if (hqPath && hqPath.length > 0) {
+          unit.setPath(hqPath);
+          return;
+        }
+
+        // SPEC S3: O da olmuyorsa ulaşılabilir en yakın kareye ilerler
+        const targetCenter = target.getCenter();
+        const fallbackPath = this.pathfinding.findNearestReachablePathTowards(startTile, {
+          x: Math.floor(targetCenter.x),
+          y: Math.floor(targetCenter.y),
+        });
+        if (fallbackPath && fallbackPath.length > 0) {
+          unit.setPath(fallbackPath);
+        } else {
+          unit.state = 'idle';
+        }
       }
     }
   }
+
 
   private getRange(entity: TargetableEntity): number {
     if (entity.kind === 'unit') {

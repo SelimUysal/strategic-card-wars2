@@ -22,6 +22,8 @@ export class WorkerManager {
   private queuedWorkerCountProvider: ((team: Team, type: UnitId) => number) | null = null;
   private reassignTimer: number = 0;
   private readonly REASSIGN_INTERVAL_SEC: number = 1.0;
+  // SPEC S7 & S3: Ulaşılamayan kaynak noktaları için soğuma süresi
+  private unreachableNodeCooldowns: Map<string, number> = new Map();
 
   constructor(
     private map: GameMap,
@@ -185,6 +187,13 @@ export class WorkerManager {
       }
     }
 
+    // Soğuma kayıtlarını temizle
+    for (const key of Array.from(this.unreachableNodeCooldowns.keys())) {
+      if (key.startsWith(`${workerId}_`)) {
+        this.unreachableNodeCooldowns.delete(key);
+      }
+    }
+
     this.workers.delete(workerId);
   }
 
@@ -222,8 +231,18 @@ export class WorkerManager {
     return count;
   }
 
-  // SPEC S2, S3, S4, S5: 4 aşamalı işçi döngüsü: toNode -> gathering -> returning -> depositing
+  // SPEC S2, S3, S4, S5, S7: 4 aşamalı işçi döngüsü: toNode -> gathering -> returning -> depositing
   public update(dt: number): void {
+    // SPEC S7 & S3: Ulaşılamayan kaynak sayaçlarını güncelle
+    for (const [key, time] of this.unreachableNodeCooldowns.entries()) {
+      const next = time - dt;
+      if (next <= 0) {
+        this.unreachableNodeCooldowns.delete(key);
+      } else {
+        this.unreachableNodeCooldowns.set(key, next);
+      }
+    }
+
     this.reassignTimer += dt;
     const shouldCheckReassign = this.reassignTimer >= this.REASSIGN_INTERVAL_SEC;
     if (shouldCheckReassign) {
@@ -264,11 +283,15 @@ export class WorkerManager {
           unit.workerState = 'depositing';
         } else {
           if (unit.state !== 'moving') {
-            const path = this.pathfinding.findPath(workerTile, hqEdge);
+            let path = this.pathfinding.findPath(workerTile, hqEdge);
+            if (!path || path.length === 0) {
+              // SPEC S3 & S7: Karargâha doğrudan yol yoksa en yakın ulaşılabilir kareye ilerler
+              path = this.pathfinding.findNearestReachablePathTowards(workerTile, hqEdge);
+            }
             if (path && path.length > 0) {
               unit.setPath(path);
             } else {
-              // SPEC S4: Karargâha giden yol kapalıysa işçi durur (idle)
+              // Karargâha giden hiçbir kareye ulaşılamıyorsa idle bekle
               unit.state = 'idle';
             }
           }
@@ -281,6 +304,14 @@ export class WorkerManager {
         // SPEC S2 & S5: Kaynak YALNIZCA teslim anında stoğa ve 'toplanan' istatistiğine eklenir
         if (unit.carriedAmount > 0 && unit.carriedType) {
           this.resourceManager.add(unit.team, unit.carriedType, unit.carriedAmount, true);
+          if (this.eventManager) {
+            this.eventManager.emit('resourceDeposited', {
+              team: unit.team,
+              type: unit.carriedType,
+              amount: unit.carriedAmount,
+              unit,
+            });
+          }
           unit.carriedAmount = 0;
         }
 
@@ -389,16 +420,26 @@ export class WorkerManager {
         // Henüz nokta yanında değil: toNode yürü
         unit.workerState = 'toNode';
         if (unit.state !== 'moving') {
-          const path = this.pathfinding.findPath(workerTile, approachTile);
+          let path = this.pathfinding.findPath(workerTile, approachTile);
+          if (!path || path.length === 0) {
+            // SPEC S3 & S7: Yol bulunamazsa donmaz: en yakın ulaşılabilir kareye doğru dene
+            path = this.pathfinding.findNearestReachablePathTowards(workerTile, approachTile);
+          }
           if (path && path.length > 0) {
             unit.setPath(path);
           } else if (distToNode <= 1) {
             unit.workerState = 'gathering';
             unit.state = 'gathering';
           } else {
+            // SPEC S3 & S7: Ulaşılamayan kaynak noktası MATCH_RULES.unreachableTargetSec boyunca ulaşılamaz sayılır
+            this.unreachableNodeCooldowns.set(
+              `${unit.id}_${node.id}`,
+              MATCH_RULES.unreachableTargetSec
+            );
             this.resourceNodes.releaseWorker(node, unit.id);
             state.assignedNodeId = null;
             unit.state = 'idle';
+            this.assignWorkerToNode(state);
           }
         }
       }
@@ -451,31 +492,49 @@ export class WorkerManager {
     return node.tile;
   }
 
+  // SPEC S3 & S7: İşçiyi en yakın uygun ve ulaşılabilir noktaya ata
   private assignWorkerToNode(state: WorkerState): void {
     const workerTile = {
       x: Math.floor(state.unit.pos.x),
       y: Math.floor(state.unit.pos.y),
     };
 
-    const node = this.resourceNodes.findNearestFreeNode(
-      state.unit.team,
-      state.type,
-      workerTile
-    );
+    const allNodes = this.resourceNodes.getAllNodes();
+    // Filtrele: uygun tip, rezervi var, kapasitesi var ve bu işçi için soğuma süresinde değil
+    const candidates = allNodes.filter((n) => {
+      if (n.type !== state.type || n.reserve <= 0) return false;
+      if (n.assignedWorkers.size >= n.maxWorkers) return false;
+      if (this.unreachableNodeCooldowns.has(`${state.unit.id}_${n.id}`)) return false;
+      return true;
+    });
 
-    if (node) {
-      const assigned = this.resourceNodes.assignWorker(node, state.unit.id);
-      if (assigned) {
+    candidates.sort((a, b) => {
+      const distA = Math.hypot(a.tile.x - workerTile.x, a.tile.y - workerTile.y);
+      const distB = Math.hypot(b.tile.x - workerTile.x, b.tile.y - workerTile.y);
+      return distA - distB;
+    });
+
+    let assigned = false;
+    for (const node of candidates) {
+      const ok = this.resourceNodes.assignWorker(node, state.unit.id);
+      if (ok) {
         state.assignedNodeId = node.id;
         state.gatherAccumulator = 0;
 
         const approachTile = this.getApproachTileForWorker(node, state.unit.id);
-        const path = this.pathfinding.findPath(workerTile, approachTile);
+        let path = this.pathfinding.findPath(workerTile, approachTile);
+        if (!path || path.length === 0) {
+          path = this.pathfinding.findNearestReachablePathTowards(workerTile, approachTile);
+        }
         if (path && path.length > 0) {
           state.unit.setPath(path);
         }
+        assigned = true;
+        break;
       }
-    } else {
+    }
+
+    if (!assigned) {
       state.assignedNodeId = null;
       state.unit.state = 'idle';
     }

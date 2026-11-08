@@ -32,4 +32,10 @@ export const MATCH_RULES = {
   armyArtilleryDepth: 5,
   armyMaxColumns: 12,
   workerCarryCapacity: 30,
+  allowTestMode: true,
+  stuckTimeoutSec: 3,
+  unreachableTargetSec: 5,
+  maxPathWaitSec: 1,
 };
+
+

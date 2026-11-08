@@ -1,3 +1,4 @@
+import { MATCH_RULES } from '../data/matchRules';
 import { TilePos } from '../types';
 import { GameMap } from './MapConfig';
 
@@ -11,10 +12,26 @@ interface PathNode {
   parent: PathNode | null;
 }
 
+// SPEC S2: Yol arama istek yapısı
+export interface PathRequest {
+  id: string;
+  start: TilePos;
+  type: 'point' | 'rect';
+  goal?: TilePos;
+  rect?: { x: number; y: number; w: number; h: number };
+  range?: number;
+  returnClosestOnFail?: boolean;
+  age: number; // Simülasyon bekleme süresi (saniye)
+  callback: (path: TilePos[] | null) => void;
+}
+
 export class Pathfinding {
   private width: number;
   private height: number;
   private dynamicBlocked: Uint16Array;
+  private requestQueue: PathRequest[] = [];
+  private readonly BASE_BATCH_SIZE: number = 10;
+
 
   // Çapraz hareket maliyeti (kök 2) ve düz hareket maliyeti (1)
   private readonly COST_ORTHOGONAL = 1;
@@ -101,37 +118,115 @@ export class Pathfinding {
     return null;
   }
 
-  // SPEC S1 & S2: A* ile findPath(start, goal)
-  public findPath(start: TilePos, goal: TilePos): TilePos[] | null {
+  // SPEC S2: Kuyruğa istek ekle (FIFO ve yaşlanma; var olan isteğin yaşı korunur)
+  public requestPath(req: Omit<PathRequest, 'age'>): void {
+    const existing = this.requestQueue.find((r) => r.id === req.id);
+    if (existing) {
+      existing.start = req.start;
+      existing.type = req.type;
+      existing.goal = req.goal;
+      existing.rect = req.rect;
+      existing.range = req.range;
+      existing.returnClosestOnFail = req.returnClosestOnFail;
+      existing.callback = req.callback;
+    } else {
+      this.requestQueue.push({ ...req, age: 0 });
+    }
+  }
+
+  public cancelRequest(id: string): void {
+    this.requestQueue = this.requestQueue.filter((r) => r.id !== id);
+  }
+
+  // SPEC S2: Her simülasyon adımında yol arama kuyruğunu FIFO + yaşlanma garantisiyle işle
+  public update(dt: number): void {
+    if (this.requestQueue.length === 0) return;
+
+    for (const req of this.requestQueue) {
+      req.age += dt;
+    }
+
+    // Yaşa göre azalan sırala (en yaşlı istekler en önde)
+    this.requestQueue.sort((a, b) => b.age - a.age);
+
+    const maxWait = MATCH_RULES.maxPathWaitSec; // 1.0 saniye
+    const urgentCount = this.requestQueue.filter((r) => r.age >= maxWait).length;
+    // Bekleme süresi 1 saniyeyi aşan tüm istekler bu adımda kesin işlenir; en az 10 istek işlenir
+    const processCount = Math.min(this.requestQueue.length, Math.max(this.BASE_BATCH_SIZE, urgentCount));
+
+    const batch = this.requestQueue.splice(0, processCount);
+    for (const req of batch) {
+      let path: TilePos[] | null = null;
+      if (req.type === 'rect' && req.rect) {
+        path = this.findPathToRect(req.start, req.rect, req.range || 1, req.returnClosestOnFail);
+      } else if (req.goal) {
+        path = this.findPath(req.start, req.goal, req.returnClosestOnFail);
+      }
+      req.callback(path);
+    }
+  }
+
+  // SPEC S1 & S2 & S3: A* ile findPath(start, goal)
+  public findPath(
+    start: TilePos,
+    goal: TilePos,
+    returnClosestOnFail: boolean = false
+  ): TilePos[] | null {
     if (!this.map.inBounds(start.x, start.y)) return null;
+
+    // Başlangıç karesi bina veya engelle yürünemez hale geldiyse en yakın yürünebilir kareye uyarla
+    let adjustedStart = start;
+    if (!this.isWalkable(start.x, start.y)) {
+      const nearestStart = this.findNearestWalkableTile(start, 5);
+      if (nearestStart) {
+        adjustedStart = nearestStart;
+      }
+    }
 
     // Hedef yürünemezse en yakın yürünebilir kareyi hedef al
     let adjustedGoal = goal;
     if (!this.isWalkable(goal.x, goal.y)) {
       const nearest = this.findNearestWalkableTile(goal);
-      if (!nearest) return null;
-      adjustedGoal = nearest;
+      if (!nearest) {
+        if (returnClosestOnFail) {
+          adjustedGoal = goal;
+        } else {
+          return null;
+        }
+      } else {
+        adjustedGoal = nearest;
+      }
     }
 
-    if (start.x === adjustedGoal.x && start.y === adjustedGoal.y) {
-      return [{ x: start.x, y: start.y }];
+    if (adjustedStart.x === adjustedGoal.x && adjustedStart.y === adjustedGoal.y) {
+      return [{ x: adjustedStart.x, y: adjustedStart.y }];
     }
 
     return this.runAStar(
-      start,
+      adjustedStart,
       (x, y) => x === adjustedGoal.x && y === adjustedGoal.y,
-      (x, y) => this.heuristic(x, y, adjustedGoal.x, adjustedGoal.y)
+      (x, y) => this.heuristic(x, y, adjustedGoal.x, adjustedGoal.y),
+      returnClosestOnFail
     );
   }
 
-  // SPEC S2: findPathToRect(start, rect, range)
+  // SPEC S2 & S3: findPathToRect(start, rect, range)
   // rect'in en yakın kenarına uzaklığı <= range olan ilk yürünebilir kareye giden yol
   public findPathToRect(
     start: TilePos,
     rect: { x: number; y: number; w: number; h: number },
-    range: number
+    range: number,
+    returnClosestOnFail: boolean = false
   ): TilePos[] | null {
     if (!this.map.inBounds(start.x, start.y)) return null;
+
+    let adjustedStart = start;
+    if (!this.isWalkable(start.x, start.y)) {
+      const nearestStart = this.findNearestWalkableTile(start, 5);
+      if (nearestStart) {
+        adjustedStart = nearestStart;
+      }
+    }
 
     const isInsideRange = (x: number, y: number): boolean => {
       const dist = this.distanceToRect(x, y, rect);
@@ -139,15 +234,21 @@ export class Pathfinding {
     };
 
     // Zaten menzil içindeyse
-    if (isInsideRange(start.x, start.y)) {
-      return [{ x: start.x, y: start.y }];
+    if (isInsideRange(adjustedStart.x, adjustedStart.y)) {
+      return [{ x: adjustedStart.x, y: adjustedStart.y }];
     }
 
     return this.runAStar(
-      start,
+      adjustedStart,
       (x, y) => isInsideRange(x, y),
-      (x, y) => this.distanceToRect(x, y, rect)
+      (x, y) => this.distanceToRect(x, y, rect),
+      returnClosestOnFail
     );
+  }
+
+  // SPEC S3: Hedefe doğrudan yol yoksa ulaşılabilir en yakın kareye ilerleme yolu
+  public findNearestReachablePathTowards(start: TilePos, target: TilePos): TilePos[] | null {
+    return this.findPath(start, target, true);
   }
 
   // SPEC S2: isReachable(start, goal)
@@ -155,11 +256,12 @@ export class Pathfinding {
     return this.findPath(start, goal) !== null;
   }
 
-  // A* algoritması çekirdeği
+  // A* algoritması çekirdeği (returnClosestOnFail ile tam hedefe ulaşılamazsa en yakın düğümü döndürür)
   private runAStar(
     start: TilePos,
     isGoal: (x: number, y: number) => boolean,
-    heuristicFn: (x: number, y: number) => number
+    heuristicFn: (x: number, y: number) => number,
+    returnClosestOnFail: boolean = false
   ): TilePos[] | null {
     const openSet: PathNode[] = [];
     const closedSet = new Uint8Array(this.width * this.height);
@@ -177,6 +279,7 @@ export class Pathfinding {
 
     openSet.push(startNode);
     nodeMap.set(startIdx, startNode);
+    let bestNode: PathNode = startNode;
 
     // Yönler (8 yön: 4 dik, 4 çapraz)
     const dirs = [
@@ -202,6 +305,10 @@ export class Pathfinding {
       const current = openSet.splice(lowestIdx, 1)[0];
       const currentIdx = current.y * this.width + current.x;
       closedSet[currentIdx] = 1;
+
+      if (current.h < bestNode.h) {
+        bestNode = current;
+      }
 
       // Hedefe ulaşıldı mı?
       if (isGoal(current.x, current.y)) {
@@ -254,9 +361,25 @@ export class Pathfinding {
       }
     }
 
+    // SPEC S3: Hedefe doğrudan yol yoksa ve kısmi yol isteniyorsa en yakın yürünebilir düğüme yol ver
+    if (returnClosestOnFail) {
+      if (bestNode && (bestNode.x !== start.x || bestNode.y !== start.y)) {
+        return this.reconstructPath(bestNode);
+      }
+      // Başlangıç noktasından çıkılamıyorsa komşu ilk yürünebilir kareyi dene
+      for (const dir of dirs) {
+        const nx = start.x + dir.dx;
+        const ny = start.y + dir.dy;
+        if (this.map.inBounds(nx, ny) && this.isWalkable(nx, ny)) {
+          return [{ x: start.x, y: start.y }, { x: nx, y: ny }];
+        }
+      }
+    }
+
     // Yol bulunamadı
     return null;
   }
+
 
   // Yolu başlangıçtan hedefe doğru yeniden oluştur
   private reconstructPath(node: PathNode): TilePos[] {

@@ -80,6 +80,16 @@ export class UnitManager {
         }
       });
     }
+
+    // SPEC S5: Bina kurulunca veya yıkılınca yürünebilirlik değişir
+    if (this.eventManager) {
+      this.eventManager.on('buildingPlaced', ({ building }: { building: any }) => {
+        this.handleBuildingWalkabilityChanged(building, true);
+      });
+      this.eventManager.on('buildingDestroyed', ({ building }: { building: any }) => {
+        this.handleBuildingWalkabilityChanged(building, false);
+      });
+    }
   }
 
   public setPathfinding(pathfinding: Pathfinding): void {
@@ -207,12 +217,103 @@ export class UnitManager {
     return list;
   }
 
-  // SPEC S3: update(dt) (hareketi yürütür, can kontrolü, animasyonlar, hafif ayrılma ve çizim)
+  // SPEC S5: Bina kurulunca veya yıkılınca yürünebilirlik değişir: ayak izindeki birimleri taşı, yolları yenile
+  private handleBuildingWalkabilityChanged(building: any, isPlaced: boolean): void {
+    if (!this.pathfinding) return;
+    const rect = building.getRect ? building.getRect() : { x: building.tile.x, y: building.tile.y, w: 4, h: 4 };
+
+    for (const unit of this.units.values()) {
+      if (unit.state === 'dead') continue;
+
+      // S5: Yeni bir binanın ayak izinde kalan birimler en yakın boş yürünebilir kareye taşınır (hızlı kayma)
+      if (isPlaced) {
+        if (
+          unit.pos.x >= rect.x &&
+          unit.pos.x < rect.x + rect.w &&
+          unit.pos.y >= rect.y &&
+          unit.pos.y < rect.y + rect.h
+        ) {
+          const nearest = this.pathfinding.findNearestWalkableTile({
+            x: Math.floor(unit.pos.x),
+            y: Math.floor(unit.pos.y),
+          });
+          if (
+            nearest &&
+            !(nearest.x >= rect.x && nearest.x < rect.x + rect.w && nearest.y >= rect.y && nearest.y < rect.y + rect.h)
+          ) {
+            unit.pos.x = nearest.x + 0.5;
+            unit.pos.y = nearest.y + 0.5;
+            unit.setPath([]);
+            if (unit.state === 'moving') {
+              unit.state = 'idle';
+            }
+          } else {
+            // Ayak izi dışındaki en yakın yürünebilir kareyi bul
+            let found = false;
+            for (let r = 1; r <= 20; r++) {
+              for (let dy = -r; dy <= r; dy++) {
+                for (let dx = -r; dx <= r; dx++) {
+                  if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+                  const tx = Math.floor(unit.pos.x) + dx;
+                  const ty = Math.floor(unit.pos.y) + dy;
+                  if (tx >= rect.x && tx < rect.x + rect.w && ty >= rect.y && ty < rect.y + rect.h) continue;
+                  if (this.pathfinding.isWalkable(tx, ty)) {
+                    unit.pos.x = tx + 0.5;
+                    unit.pos.y = ty + 0.5;
+                    unit.setPath([]);
+                    if (unit.state === 'moving') unit.state = 'idle';
+                    found = true;
+                    break;
+                  }
+                }
+                if (found) break;
+              }
+              if (found) break;
+            }
+          }
+        }
+      }
+
+      // S5: Yolu geçersizleşen birimler yolunu yeniden hesaplar
+      if (unit.state === 'moving' && unit.path.length > 0) {
+        let intersects = false;
+        for (let i = unit.pathIndex; i < unit.path.length; i++) {
+          const p = unit.path[i];
+          if (p.x >= rect.x && p.x < rect.x + rect.w && p.y >= rect.y && p.y < rect.y + rect.h) {
+            intersects = true;
+            break;
+          }
+        }
+
+        if (intersects) {
+          const dest = unit.path[unit.path.length - 1];
+          const start = { x: Math.floor(unit.pos.x), y: Math.floor(unit.pos.y) };
+          let newPath = this.pathfinding.findPath(start, dest);
+          if (!newPath || newPath.length === 0) {
+            newPath = this.pathfinding.findNearestReachablePathTowards(start, dest);
+          }
+          if (newPath && newPath.length > 0) {
+            unit.setPath(newPath);
+          } else {
+            unit.setPath([]);
+            unit.state = 'idle';
+          }
+        }
+      }
+    }
+  }
+
+  // SPEC S1 & S2 & S4: update(dt) (hareketi yürütür, can kontrolü, bekçi, hafif ayrılma ve çizim)
   public update(dt: number): void {
+    // SPEC S2: Yol arama kuyruğu adil işleme adımı
+    if (this.pathfinding) {
+      this.pathfinding.update(dt);
+    }
+
     this.animTime += dt;
     const unitsToRemove: Unit[] = [];
 
-    // Birim mantığını güncelle
+    // SPEC S1: Birim mantığı TÜM birimler için her simülasyon adımında çalışır. Asla atlanmaz!
     for (const unit of this.units.values()) {
       // R11C A4: Hasar parlama sayacını azalt
       if (unit.damageFlashTimer > 0) {
@@ -243,6 +344,32 @@ export class UnitManager {
           : UNITS[unit.defId].moveSpeed;
 
         unit.updateMovement(dt, effectiveSpeed);
+
+        // SPEC S4: Bekçi (watchdog) kontrolü
+        const watchdog = unit.checkWatchdog(dt, MATCH_RULES.stuckTimeoutSec);
+        if (watchdog.isStuck && this.pathfinding) {
+          const currentPos = { x: Math.floor(unit.pos.x), y: Math.floor(unit.pos.y) };
+          if (watchdog.retryCount === 1) {
+            // Yolu yeniden hesapla
+            const dest = unit.path[unit.path.length - 1];
+            if (dest) {
+              let newPath = this.pathfinding.findPath(currentPos, dest);
+              if (!newPath || newPath.length === 0) {
+                newPath = this.pathfinding.findNearestReachablePathTowards(currentPos, dest);
+              }
+              if (newPath && newPath.length > 0) {
+                unit.setPath(newPath);
+              } else {
+                unit.setPath([]);
+                unit.state = 'idle';
+              }
+            }
+          } else {
+            // Yine ilerlemezse mevcut hedef ulaşılamaz sayılır (S3)
+            unit.setPath([]);
+            unit.state = 'idle';
+          }
+        }
       }
     }
 

@@ -19,6 +19,12 @@ export class Unit {
   public attackCooldown: number;
   public mode: UnitMode;
 
+  // SPEC S4: Bekçi (watchdog) takip alanları
+  public stuckTimer: number = 0;
+  public lastStuckPos: { x: number; y: number } = { x: 0, y: 0 };
+  public stuckRetryCount: number = 0;
+  public currentTargetId: string | null = null;
+
   // SPEC S8: İşçi taşıma alanları ve durumları
   public carriedType: 'gold' | 'wood' | null = null;
   public carriedAmount: number = 0;
@@ -51,7 +57,9 @@ export class Unit {
     this.lastAttackerId = null;
     this.attackCooldown = 0;
     this.mode = 'waiting';
+    this.lastStuckPos = { x: params.pos.x, y: params.pos.y };
   }
+
 
   // SPEC S2: Hareket: path boyunca, etkin moveSpeed x dt ile ilerler; karelerin merkezlerinden geçer
   public updateMovement(dt: number, effectiveMoveSpeed: number): void {
@@ -102,6 +110,8 @@ export class Unit {
       this.path = [];
       this.pathIndex = 0;
       if (this.state === 'moving') this.state = 'idle';
+      this.stuckTimer = 0;
+      this.stuckRetryCount = 0;
       return;
     }
 
@@ -114,7 +124,36 @@ export class Unit {
     );
     this.pathIndex = distToFirst < 0.2 && path.length > 1 ? 1 : 0;
     this.state = 'moving';
+    this.stuckTimer = 0;
+    this.lastStuckPos = { x: this.pos.x, y: this.pos.y };
   }
+
+  // SPEC S4: Bekçi (watchdog) kontrolü
+  public checkWatchdog(dt: number, timeoutSec: number = 3): { isStuck: boolean; retryCount: number } {
+    if (this.state !== 'moving') {
+      this.stuckTimer = 0;
+      this.stuckRetryCount = 0;
+      this.lastStuckPos = { x: this.pos.x, y: this.pos.y };
+      return { isStuck: false, retryCount: 0 };
+    }
+
+    this.stuckTimer += dt;
+    if (this.stuckTimer >= timeoutSec) {
+      this.stuckTimer = 0;
+      const dist = Math.hypot(this.pos.x - this.lastStuckPos.x, this.pos.y - this.lastStuckPos.y);
+      this.lastStuckPos = { x: this.pos.x, y: this.pos.y };
+
+      if (dist < 0.3) {
+        this.stuckRetryCount++;
+        return { isStuck: true, retryCount: this.stuckRetryCount };
+      } else {
+        this.stuckRetryCount = 0;
+      }
+    }
+
+    return { isStuck: false, retryCount: this.stuckRetryCount };
+  }
+
 
   // SPEC S2: takeDamage(amount, sourceId): hp azaltır, lastAttackerId'yi günceller, ölüp ölmediğini döndürür
   public takeDamage(amount: number, sourceId: string): boolean {

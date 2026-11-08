@@ -38,6 +38,46 @@ export class ProductionManager {
     if (this.unitManager.setPathfinding) {
       this.unitManager.setPathfinding(this.pathfinding);
     }
+
+    // S4 e: Yıkılan bina temizliği: kuyruktaki başlamamış askerler iade edilir, üretilmekte olan kaybolur, ayrılan nüfus serbest kalır
+    if (this.eventManager) {
+      this.eventManager.on('buildingDestroyed', ({ building }: { building: Building }) => {
+        this.handleBuildingDestroyed(building);
+      });
+    }
+  }
+
+  // S4 e: Bina yıkıldığında kuyruk temizliği ve iade mantığı
+  public handleBuildingDestroyed(building: Building): void {
+    const queue = this.queues.get(building.id);
+    if (!queue || queue.length === 0) {
+      this.queues.delete(building.id);
+      return;
+    }
+
+    const first = queue[0];
+    const firstUDef = UNITS[first.unitId];
+
+    if (first.reservedPop) {
+      // Bina için ayrılan nüfus serbest bırakılır
+      this.resourceManager.releasePop(first.team, firstUDef.pop);
+      // O an üretilmekte olan asker kaybolur (iadesiz)
+
+      // Başlamamış askerlerin (index >= 1) bedeli iade edilir
+      for (let i = 1; i < queue.length; i++) {
+        const item = queue[i];
+        const uDef = UNITS[item.unitId];
+        this.resourceManager.refund(item.team, uDef.costGold, uDef.costWood);
+      }
+    } else {
+      // İlk birimin üretimi bile henüz başlamamış: hepsi iade edilir
+      for (const item of queue) {
+        const uDef = UNITS[item.unitId];
+        this.resourceManager.refund(item.team, uDef.costGold, uDef.costWood);
+      }
+    }
+
+    this.queues.delete(building.id);
   }
 
   public setCardAvailabilityProvider(

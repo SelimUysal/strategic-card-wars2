@@ -47,5 +47,6 @@ export interface Profile {
   deck: CardId[];
   survivalRecords: Partial<Record<MapId, number>>;
   history: MatchHistoryEntry[];
+  audioMuted?: boolean;
 }
 

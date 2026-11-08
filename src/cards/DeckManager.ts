@@ -73,6 +73,56 @@ export class DeckManager {
     this.resetToDefault();
   }
 
+  public reorder(fromIndex: number, toIndex: number): SetDeckResult {
+    if (
+      fromIndex < 0 ||
+      fromIndex >= this.deck.length ||
+      toIndex < 0 ||
+      toIndex >= this.deck.length
+    ) {
+      return { ok: false, error: 'Geçersiz sıra numarası' };
+    }
+    if (fromIndex === toIndex) return { ok: true };
+
+    const newDeck = [...this.deck];
+    const [moved] = newDeck.splice(fromIndex, 1);
+    newDeck.splice(toIndex, 0, moved);
+    this.deck = newDeck;
+    this.notifyChanged();
+    return { ok: true };
+  }
+
+  public addCard(cardId: CardId): SetDeckResult {
+    if (this.deck.length >= MATCH_RULES.deckSize) {
+      return { ok: false, error: 'Önce desteden bir kart çıkar' };
+    }
+    if (this.deck.includes(cardId)) {
+      return { ok: false, error: 'Kart zaten destede' };
+    }
+    if (!this.collectionManager.isCardUnlocked(cardId)) {
+      return { ok: false, error: 'Kart henüz açık değil' };
+    }
+    return this.setDeck([...this.deck, cardId]);
+  }
+
+  public removeCard(cardId: CardId): SetDeckResult {
+    if (!this.deck.includes(cardId)) {
+      return { ok: false, error: 'Kart destede bulunamadı' };
+    }
+    this.deck = this.deck.filter((id) => id !== cardId);
+    this.notifyChanged();
+    return { ok: true };
+  }
+
+  public removeCardAtIndex(index: number): SetDeckResult {
+    if (index < 0 || index >= this.deck.length) {
+      return { ok: false, error: 'Geçersiz yuva' };
+    }
+    this.deck.splice(index, 1);
+    this.notifyChanged();
+    return { ok: true };
+  }
+
   public onChange(listener: () => void): () => void {
     this.changeListeners.push(listener);
     return () => {

@@ -1,3 +1,4 @@
+import { Building } from '../buildings/Building';
 import { BuildingManager } from '../buildings/BuildingManager';
 import { ConstructionManager } from '../buildings/ConstructionManager';
 import { ProductionManager, ProductionQueueItem } from '../buildings/ProductionManager';
@@ -12,8 +13,10 @@ import { UNITS } from '../data/units';
 import { ResourceManager } from '../economy/ResourceManager';
 import { WorkerManager } from '../economy/WorkerManager';
 import { BuildingId, CardDef, CardId, TilePos, UnitId } from '../types';
+import { AudioManager } from '../audio/AudioManager';
 import { UnitOverlay } from './UnitOverlay';
 import { BuildPreview } from './BuildPreview';
+import { HUD } from './HUD';
 
 interface DragState {
   cardId: CardId;
@@ -87,11 +90,20 @@ export class CardPanel {
     startY: number;
     pointerId: number;
     pointerType: string;
+    isUnaffordable: boolean;
+    missingType: 'gold' | 'wood' | 'both';
   } | null = null;
 
   private lastPointerUpHandledTime: number = 0;
 
   private buildPreview: BuildPreview | null = null;
+
+  // S3: Bırakma başarısızlığı uyarısı banner elemanı ve zamanlayıcısı
+  private dropBannerEl: HTMLElement | null = null;
+  private dropBannerTimer: number | null = null;
+
+  // S4 d: Yıkılan bina temizliği olay aboneliği
+  private unbindBuildingDestroyed: (() => void) | null = null;
 
   private cardViews: Map<CardId, CardItemView> = new Map();
   private workerViews: Map<'altin_madencisi' | 'oduncu', WorkerButtonView> = new Map();
@@ -132,6 +144,11 @@ export class CardPanel {
     window.addEventListener('pointermove', this.onPointerMoveBound);
     window.addEventListener('pointerup', this.onPointerUpBound);
     window.addEventListener('pointercancel', this.onPointerUpBound);
+
+    // S4 d: Yıkılan bina temizliği olayını dinle
+    this.unbindBuildingDestroyed = this.buildingManager.onBuildingDestroyed((b) => {
+      this.handleBuildingDestroyed(b);
+    });
 
     // SPEC S1: Kart ve işçi buton elemanları maç başında BİR KEZ oluşturulur
     this.initCardElements();
@@ -321,6 +338,7 @@ export class CardPanel {
 
   // SPEC S4: Kart üzerinde uyarı gösterimi ('Kuyruk dolu', 'Kaynak yetersiz', 'Önce bina kur', vb.)
   public showWarning(cardId: CardId, text: string, durationMs: number = 1500): void {
+    AudioManager.getInstance().playSfx('sfx_hata');
     const view = this.cardViews.get(cardId);
     if (!view) return;
 
@@ -338,6 +356,7 @@ export class CardPanel {
 
   // SPEC S4: İşçi butonu üzerinde 1 saniyelik uyarı gösterimi
   public showWorkerWarning(type: 'altin_madencisi' | 'oduncu', text: 'Kuyruk dolu' | 'Kaynak yetersiz'): void {
+    AudioManager.getInstance().playSfx('sfx_hata');
     const view = this.workerViews.get(type);
     if (!view) return;
 
@@ -351,6 +370,106 @@ export class CardPanel {
       view.toastEl.classList.remove('visible');
       view.toastTimer = null;
     }, 1000);
+  }
+
+  // S1 & S2: Eksik kaynak hesaplayıcı ve biçimlendirici
+  private getMissingResources(costGold: number, costWood: number): {
+    isMissing: boolean;
+    str: string;
+    missingType: 'gold' | 'wood' | 'both';
+    missingGold: number;
+    missingWood: number;
+  } {
+    const currGold = this.resourceManager.getGold('player');
+    const currWood = this.resourceManager.getWood('player');
+    const missingGold = Math.max(0, costGold - currGold);
+    const missingWood = Math.max(0, costWood - currWood);
+    const parts: string[] = [];
+    if (missingGold > 0) parts.push(`${missingGold} altın`);
+    if (missingWood > 0) parts.push(`${missingWood} odun`);
+
+    const missingType: 'gold' | 'wood' | 'both' =
+      missingGold > 0 && missingWood > 0 ? 'both' : missingGold > 0 ? 'gold' : 'wood';
+
+    return {
+      isMissing: parts.length > 0,
+      str: parts.length > 0 ? `Eksik: ${parts.join(', ')}` : '',
+      missingType,
+      missingGold,
+      missingWood,
+    };
+  }
+
+  // S3: Bırakma başarısızlığı uyarısı: ekranın üst ortasında 2 sn 'Yerleştirilemedi: <neden>'
+  private showDropFailureBanner(text: string): void {
+    if (!this.dropBannerEl) {
+      this.dropBannerEl = document.createElement('div');
+      this.dropBannerEl.className = 'drop-failure-banner';
+      document.body.appendChild(this.dropBannerEl);
+    }
+    this.dropBannerEl.textContent = text;
+    this.dropBannerEl.classList.add('visible');
+
+    if (this.dropBannerTimer !== null) {
+      window.clearTimeout(this.dropBannerTimer);
+    }
+    this.dropBannerTimer = window.setTimeout(() => {
+      if (this.dropBannerEl) {
+        this.dropBannerEl.classList.remove('visible');
+      }
+      this.dropBannerTimer = null;
+    }, 2000);
+  }
+
+  // S4 d: Yıkılan bina temizliği: o binanın kartı 'bina kurulmadı' durumuna geri döner
+  private handleBuildingDestroyed(building: Building): void {
+    if (building.team !== 'player') return;
+
+    for (const view of this.cardViews.values()) {
+      const cardDef = view.cardDef;
+      let matches = false;
+      if (cardDef.category === 'asker') {
+        const uDef = UNITS[cardDef.refId as UnitId];
+        if (uDef && uDef.producedAt === building.defId) {
+          matches = true;
+        }
+      } else {
+        if (cardDef.refId === building.defId) {
+          matches = true;
+        }
+      }
+
+      if (matches) {
+        // İlerleme çubuğu ve kuyruk bilgisi sıfırlanır
+        view.queueBoxEl.style.display = 'none';
+        view.queueCountEl.textContent = '';
+        view.remainingEl.textContent = '';
+        view.progressFillEl.style.width = '0%';
+        view.stopBtnEl.style.display = 'none';
+
+        view.lastQueueBoxVisible = false;
+        view.lastQueueCountText = '';
+        view.lastRemainingText = '';
+        view.lastProgressPct = 0;
+        view.lastStopBtnVisible = false;
+
+        // İnşaat halindeyse 'İnşa ediliyor' durumu kalkar
+        view.statusEl.style.display = 'none';
+        view.statusEl.textContent = '';
+        view.lastStatusVisible = false;
+        view.lastStatusText = '';
+
+        // Bina maliyeti görünür, tekrar sürüklenebilir duruma döner
+        const bDef = BUILDINGS[building.defId];
+        const costStr = bDef ? `${bDef.costGold} / ${bDef.costWood}` : '0 / 0';
+        view.costLabelEl.textContent = 'Bina:';
+        view.costValEl.textContent = costStr;
+        view.lastCostLabel = 'Bina:';
+        view.lastCostVal = costStr;
+      }
+    }
+
+    this.update();
   }
 
   // SPEC S3: Asker kartı + bina hazırsa her tıklama TAM OLARAK 1 birimi kuyruğa ekler
@@ -378,24 +497,36 @@ export class CardPanel {
           return;
         }
 
-        const canAfford = this.resourceManager.canAfford('player', unitDef.costGold, unitDef.costWood);
-        if (!canAfford) {
-          this.showWarning(cardId, 'Kaynak yetersiz');
+        // S2: Yetersiz kaynakla tıklama girişimi: kartta 1,5 sn 'Kaynak yetersiz', HUD 1 sn kırmızı yanıp söner
+        const missing = this.getMissingResources(unitDef.costGold, unitDef.costWood);
+        if (missing.isMissing) {
+          this.showWarning(cardId, 'Kaynak yetersiz', 1500);
+          HUD.flashResource(missing.missingType);
           return;
         }
 
         const enqueued = this.productionManager.enqueue('player', activeBuilding, unitDef.id);
-        if (!enqueued) {
+        if (enqueued) {
+          AudioManager.getInstance().playSfx('sfx_kart_sec');
+        } else {
           if (this.productionManager.getQueue(activeBuilding).length >= 5) {
             this.showWarning(cardId, 'Kuyruk dolu');
           } else {
-            this.showWarning(cardId, 'Kaynak yetersiz');
+            this.showWarning(cardId, 'Kaynak yetersiz', 1500);
+            HUD.flashResource(missing.missingType);
           }
         }
         this.update();
       } else if (constructingBuilding) {
         this.showWarning(cardId, 'Bina inşa ediliyor', 1500);
       } else {
+        // Bina henüz kurulmamış
+        const missing = this.getMissingResources(bDef.costGold, bDef.costWood);
+        if (missing.isMissing) {
+          this.showWarning(cardId, 'Kaynak yetersiz', 1500);
+          HUD.flashResource(missing.missingType);
+          return;
+        }
         this.showWarning(cardId, `Önce ${bDef.nameTr} kurulmalı`, 1500);
       }
     } else {
@@ -403,10 +534,18 @@ export class CardPanel {
       const bDefId = cardDef.refId as BuildingId;
       const bDef = BUILDINGS[bDefId];
       const activeBuildings = this.buildingManager.getBuildingsOfType('player', bDefId);
-      if (activeBuildings.length >= bDef.maxCount) {
+      const isLimitReached = activeBuildings.filter((b) => b.state !== 'destroyed').length >= bDef.maxCount;
+
+      if (isLimitReached) {
         this.showWarning(cardId, 'Kuyruk dolu');
-      } else if (!this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood)) {
-        this.showWarning(cardId, 'Kaynak yetersiz');
+        return;
+      }
+
+      const missing = this.getMissingResources(bDef.costGold, bDef.costWood);
+      if (missing.isMissing) {
+        this.showWarning(cardId, 'Kaynak yetersiz', 1500);
+        HUD.flashResource(missing.missingType);
+        return;
       }
     }
   }
@@ -425,17 +564,22 @@ export class CardPanel {
       return;
     }
 
-    if (!this.resourceManager.canAfford('player', uDef.costGold, uDef.costWood)) {
+    const missing = this.getMissingResources(uDef.costGold, uDef.costWood);
+    if (missing.isMissing) {
       this.showWorkerWarning(type, 'Kaynak yetersiz');
+      HUD.flashResource(missing.missingType);
       return;
     }
 
     const enqueued = this.productionManager.enqueue('player', hq, type);
-    if (!enqueued) {
+    if (enqueued) {
+      AudioManager.getInstance().playSfx('sfx_tikla');
+    } else {
       if (this.productionManager.getQueue(hq).length >= 5 || !this.workerManager.canAddWorker('player', type)) {
         this.showWorkerWarning(type, 'Kuyruk dolu');
       } else {
         this.showWorkerWarning(type, 'Kaynak yetersiz');
+        HUD.flashResource(missing.missingType);
       }
     }
     this.update();
@@ -468,6 +612,8 @@ export class CardPanel {
 
     let buildingId: BuildingId | null = null;
     let footprint: { w: number; h: number } | null = null;
+    let costGold = 0;
+    let costWood = 0;
 
     if (cardDef.category === 'asker') {
       const unitDef = UNITS[cardDef.refId as UnitId];
@@ -479,18 +625,25 @@ export class CardPanel {
       // Yalnızca bina henüz hiç yokken sürüklenebilir
       if (!activeBuilding && !constructingBuilding) {
         const bDef = BUILDINGS[prodBuildingId];
+        costGold = bDef.costGold;
+        costWood = bDef.costWood;
         const canAfford = this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood);
         if (canAfford) {
           buildingId = prodBuildingId;
           footprint = bDef.footprint;
         }
+      } else if (activeBuilding) {
+        costGold = unitDef.costGold;
+        costWood = unitDef.costWood;
       }
     } else {
       // Savunma kartı
       const bDefId = cardDef.refId as BuildingId;
       const bDef = BUILDINGS[bDefId];
+      costGold = bDef.costGold;
+      costWood = bDef.costWood;
       const activeBuildings = this.buildingManager.getBuildingsOfType('player', bDefId);
-      const isLimitReached = activeBuildings.length >= bDef.maxCount;
+      const isLimitReached = activeBuildings.filter((b) => b.state !== 'destroyed').length >= bDef.maxCount;
       const canAfford = this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood);
 
       if (!isLimitReached && canAfford) {
@@ -498,6 +651,8 @@ export class CardPanel {
         footprint = bDef.footprint;
       }
     }
+
+    const missing = this.getMissingResources(costGold, costWood);
 
     this.pointerDownCandidate = {
       cardId,
@@ -507,6 +662,8 @@ export class CardPanel {
       startY: e.clientY,
       pointerId: e.pointerId,
       pointerType: e.pointerType,
+      isUnaffordable: missing.isMissing,
+      missingType: missing.missingType,
     };
   }
 
@@ -520,40 +677,52 @@ export class CardPanel {
 
     // SPEC S3: 6 pikseli geçince sürükleme başlar
     if (!this.dragState) {
-      if (dist >= 6 && this.pointerDownCandidate.buildingId !== 'hq') {
-        this.dragState = {
-          cardId: this.pointerDownCandidate.cardId,
-          buildingId: this.pointerDownCandidate.buildingId,
-          footprint: this.pointerDownCandidate.footprint,
-          pointerId: this.pointerDownCandidate.pointerId,
-          pointerType: this.pointerDownCandidate.pointerType,
-          startX: this.pointerDownCandidate.startX,
-          startY: this.pointerDownCandidate.startY,
-          isDragging: true,
-          currentTile: null,
-          isValid: false,
-        };
-
-        const view = this.cardViews.get(this.dragState.cardId);
-        if (view) {
-          view.el.classList.add('dragging');
+      if (dist >= 6) {
+        // S2: Yetersiz kaynakla sürükleme girişimi: kartın üstünde 1,5 sn 'Kaynak yetersiz' uyarısı;
+        // ayrıca HUD'da eksik olan kaynağın (Altın ve/veya Odun) değeri 1 sn kırmızı yanıp söner
+        if (this.pointerDownCandidate.isUnaffordable) {
+          this.showWarning(this.pointerDownCandidate.cardId, 'Kaynak yetersiz', 1500);
+          HUD.flashResource(this.pointerDownCandidate.missingType);
+          this.pointerDownCandidate = null;
+          return;
         }
 
-        this.cameraController.setInputEnabled(false);
+        if (this.pointerDownCandidate.buildingId !== 'hq') {
+          AudioManager.getInstance().playSfx('sfx_kart_sec');
+          this.dragState = {
+            cardId: this.pointerDownCandidate.cardId,
+            buildingId: this.pointerDownCandidate.buildingId,
+            footprint: this.pointerDownCandidate.footprint,
+            pointerId: this.pointerDownCandidate.pointerId,
+            pointerType: this.pointerDownCandidate.pointerType,
+            startX: this.pointerDownCandidate.startX,
+            startY: this.pointerDownCandidate.startY,
+            isDragging: true,
+            currentTile: null,
+            isValid: false,
+          };
 
-        // SPEC S1 - S6: BuildPreview başlat
-        if (this.buildPreview) {
-          this.buildPreview.destroy();
+          const view = this.cardViews.get(this.dragState.cardId);
+          if (view) {
+            view.el.classList.add('dragging');
+          }
+
+          this.cameraController.setInputEnabled(false);
+
+          // SPEC S1 - S6: BuildPreview başlat
+          if (this.buildPreview) {
+            this.buildPreview.destroy();
+          }
+          this.buildPreview = new BuildPreview(
+            this.sceneManager.getScene(),
+            this.cameraController.getCamera(),
+            this.canvas,
+            this.constructionManager
+          );
+          this.buildPreview.start(this.dragState.buildingId);
+        } else {
+          return;
         }
-        this.buildPreview = new BuildPreview(
-          this.sceneManager.getScene(),
-          this.cameraController.getCamera(),
-          this.canvas,
-          this.constructionManager
-        );
-        this.buildPreview.start(this.dragState.buildingId);
-      } else {
-        return;
       }
     }
 
@@ -587,8 +756,16 @@ export class CardPanel {
         e.clientY <= panelRect.bottom;
 
       // SPEC S6: Dokunmatik bırakıldığında da bu ofsetli kareye yerleştirilir
-      if (!isOverPanel && this.dragState.isValid && this.dragState.currentTile) {
-        this.constructionManager.place('player', this.dragState.buildingId, this.dragState.currentTile);
+      if (!isOverPanel) {
+        if (this.dragState.isValid && this.dragState.currentTile) {
+          this.constructionManager.place('player', this.dragState.buildingId, this.dragState.currentTile);
+          AudioManager.getInstance().playSfx('sfx_bina_yerlestir');
+        } else {
+          // S3: Bırakma başarısızlığı: sürüklenen bina geçersiz bir yere bırakılırsa ekranın üst ortasında 2 sn 'Yerleştirilemedi: <neden>' uyarısı çıkar
+          const validity = this.buildPreview ? this.buildPreview.getValidity() : null;
+          const reason = validity?.reasonText || 'Zemin uygun değil';
+          this.showDropFailureBanner(`Yerleştirilemedi: ${reason}`);
+        }
       }
 
       // S7: Temizlik
@@ -657,11 +834,15 @@ export class CardPanel {
               costVal: costStr,
             });
           } else {
-            // Henüz yerleştirilmemiş: Sürekli küçük ipucu 'Önce bina kur (sürükle)'
-            const isPassive = !isAvailable;
+            // S1: Pasif kartlar: altın veya odun maliyeti karşılanamıyorsa kart PASİF (gri) görünür ve sürüklenemez.
+            // Kartın üstünde yalnızca eksik olan kaynaklar yazar: 'Eksik: 40 altın, 20 odun'.
+            const missing = this.getMissingResources(bDef.costGold, bDef.costWood);
+            const isPassive = !isAvailable || missing.isMissing;
+            const statusText = missing.isMissing ? missing.str : 'Önce bina kur (sürükle)';
+
             this.applyCardUpdates(view, {
               disabled: isPassive,
-              statusText: 'Önce bina kur (sürükle)',
+              statusText,
               statusVisible: true,
               queueBoxVisible: false,
               queueCountText: '',
@@ -676,9 +857,17 @@ export class CardPanel {
           // Üretim binası HAZIR: Asker üretimi
           const costStr = `${unitDef.costGold} / ${unitDef.costWood}`;
           const queue: ProductionQueueItem[] = this.productionManager.getQueue(activeBuilding);
-          const canAfford = this.resourceManager.canAfford('player', unitDef.costGold, unitDef.costWood);
+          const missing = this.getMissingResources(unitDef.costGold, unitDef.costWood);
           const isQueueFull = queue.length >= 5;
-          const isPassive = !isAvailable || !canAfford || isQueueFull;
+          const isPassive = !isAvailable || missing.isMissing || isQueueFull;
+
+          // S1: Asker kartında (bina hazırken) maliyet yetersizse aynı etiket kullanılır: 'Eksik: ...'
+          let statusText = '';
+          let statusVisible = false;
+          if (missing.isMissing) {
+            statusText = missing.str;
+            statusVisible = true;
+          }
 
           if (queue.length > 0) {
             // SPEC S6: Birim üretiliyorsa kuyruğun başındaki birimin ilerleme çubuğu, 'Kalan: N sn' ve 'Kuyruk: n/5'
@@ -689,8 +878,8 @@ export class CardPanel {
 
             this.applyCardUpdates(view, {
               disabled: isPassive,
-              statusText: '',
-              statusVisible: false,
+              statusText,
+              statusVisible,
               queueBoxVisible: true,
               queueCountText: `Kuyruk: ${queue.length}/5`,
               remainingText: `Kalan: ${realSec} sn`,
@@ -702,8 +891,8 @@ export class CardPanel {
           } else {
             this.applyCardUpdates(view, {
               disabled: isPassive,
-              statusText: '',
-              statusVisible: false,
+              statusText,
+              statusVisible,
               queueBoxVisible: false,
               queueCountText: '',
               remainingText: '',
@@ -722,9 +911,10 @@ export class CardPanel {
         const playerBuildings = this.buildingManager.getBuildingsOfType('player', bDefId);
         const constructingBuilding = playerBuildings.find((b) => b.state === 'constructing');
 
-        const isLimitReached = playerBuildings.filter((b) => b.state !== 'destroyed').length >= bDef.maxCount;
-        const canAfford = this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood);
-        const isPassive = !isAvailable || isLimitReached || !canAfford;
+        const activeCount = playerBuildings.filter((b) => b.state !== 'destroyed').length;
+        const isLimitReached = activeCount >= bDef.maxCount;
+        const missing = this.getMissingResources(bDef.costGold, bDef.costWood);
+        const isPassive = !isAvailable || isLimitReached || missing.isMissing;
 
         if (constructingBuilding) {
           const simSec = this.constructionManager.getRemainingSimSec(constructingBuilding);
@@ -744,10 +934,21 @@ export class CardPanel {
             costVal: costStr,
           });
         } else {
+          let statusText = '';
+          let statusVisible = false;
+          if (isLimitReached) {
+            statusText = 'Kuyruk dolu';
+            statusVisible = true;
+          } else if (missing.isMissing) {
+            // S1: Eksik olan kaynaklar yazar: 'Eksik: ...'
+            statusText = missing.str;
+            statusVisible = true;
+          }
+
           this.applyCardUpdates(view, {
             disabled: isPassive,
-            statusText: isLimitReached ? 'Kuyruk dolu' : '',
-            statusVisible: isLimitReached,
+            statusText,
+            statusVisible,
             queueBoxVisible: false,
             queueCountText: '',
             remainingText: '',
@@ -872,6 +1073,17 @@ export class CardPanel {
     if (view.lastQueueBoxVisible !== updates.queueBoxVisible) {
       view.lastQueueBoxVisible = updates.queueBoxVisible;
       view.queueBoxEl.style.display = updates.queueBoxVisible ? 'flex' : 'none';
+      if (!updates.queueBoxVisible) {
+        // S4 d: Kuyruk kapandığında ilerleme çubuğu ve kuyruk metinleri sıfırlanır
+        view.progressFillEl.style.width = '0%';
+        view.lastProgressPct = 0;
+        view.queueCountEl.textContent = '';
+        view.lastQueueCountText = '';
+        view.remainingEl.textContent = '';
+        view.lastRemainingText = '';
+        view.stopBtnEl.style.display = 'none';
+        view.lastStopBtnVisible = false;
+      }
     }
 
     if (updates.queueBoxVisible) {
@@ -911,6 +1123,21 @@ export class CardPanel {
     if (this.updateInterval !== null) {
       clearInterval(this.updateInterval);
       this.updateInterval = null;
+    }
+
+    if (this.unbindBuildingDestroyed) {
+      this.unbindBuildingDestroyed();
+      this.unbindBuildingDestroyed = null;
+    }
+
+    if (this.dropBannerTimer !== null) {
+      clearTimeout(this.dropBannerTimer);
+      this.dropBannerTimer = null;
+    }
+
+    if (this.dropBannerEl && this.dropBannerEl.parentElement) {
+      this.dropBannerEl.parentElement.removeChild(this.dropBannerEl);
+      this.dropBannerEl = null;
     }
 
     for (const view of this.cardViews.values()) {

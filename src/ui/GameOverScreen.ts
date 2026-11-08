@@ -1,3 +1,4 @@
+import { AudioManager } from '../audio/AudioManager';
 import { REWARDS } from '../data/rewards';
 import { MatchResult } from '../game-modes/VictoryConditions';
 import { MatchStats } from '../types';
@@ -15,6 +16,13 @@ export class GameOverScreen {
     private onOpenMarket: () => void,
     private onMainMenu: () => void
   ) {
+    // S3: Maç sonunda zafer -> muzik_zafer; yenilgi, beraberlik, çıkış -> muzik_yenilgi
+    if (this.result === 'win') {
+      AudioManager.getInstance().playMusic('muzik_zafer');
+    } else {
+      AudioManager.getInstance().playMusic('muzik_yenilgi');
+    }
+
     this.element = document.createElement('div');
     this.element.className = 'gameover-overlay';
 
@@ -111,10 +119,12 @@ export class GameOverScreen {
     const menuBtn = this.element.querySelector('[data-action="menu"]') as HTMLButtonElement;
 
     marketBtn.addEventListener('click', () => {
+      AudioManager.getInstance().playSfx('sfx_tikla');
       this.onOpenMarket();
     });
 
     menuBtn.addEventListener('click', () => {
+      AudioManager.getInstance().playSfx('sfx_tikla');
       this.onMainMenu();
     });
 
