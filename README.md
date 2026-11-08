@@ -8,11 +8,9 @@
 ---
 <div align="center">
 
-# 🎮 OYUNU OYNA
-
-### 👇 Oyuna gitmek için tıkla
-
-[🚀 https://strategic-card-wars2.netlify.app/](https://strategic-card-wars2.netlify.app/)
+<a href="https://strategic-card-wars2.netlify.app/" style="display:inline-block; background:rgba(15, 23, 42, 0.92); color:#fbbf24; padding:18px 45px; border:2px solid #fbbf24; border-radius:12px; font-size:22px; font-weight:bold; text-decoration:none;">
+  🎮 OYUNU OYNA
+</a>
 
 </div>
 
