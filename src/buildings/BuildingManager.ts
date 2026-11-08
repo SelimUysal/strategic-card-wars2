@@ -135,31 +135,21 @@ export class BuildingManager {
   // SPEC S5 & D3: removeBuilding(building)
   // unblockRect hemen çağrılır; kareler anında serbest kalır. Bina 0.6 sn çöküp 4 sn enkaz bırakır.
   public removeBuilding(building: Building): void {
-    if (!this.buildings.has(building.id)) return;
+    if (!this.buildings.has(building.id) && building.state === 'destroyed') return;
 
     // S4: Bina durumu 'destroyed' yapılır
     building.state = 'destroyed';
 
-    // D3: Kareleri hemen yürünebilir/inşa edilebilir yap (enkaz kuralları etkilemez)
+    // Kareleri hemen yürünebilir/inşa edilebilir yap
     this.pathfinding.unblockRect(building.getRect());
 
     this.buildings.delete(building.id);
 
-    // D3: Çizim görselini çökme animasyonu listesine al (0.6 sn sonra enkaza dönüşür)
+    // Çizim görselini sahneden anında kaldır ve belleği temizle (enkaz bırakma)
     const entry = this.buildingVisuals.get(building.id);
     if (entry) {
-      entry.scaffoldGroup.visible = false;
-      const def = BUILDINGS[building.defId];
-      const w = def ? def.footprint.w : 4;
-      const h = def ? def.footprint.h : 4;
-
-      this.collapsingBuildings.push({
-        visual: entry.group,
-        timer: 0,
-        w,
-        h,
-        position: entry.group.position.clone(),
-      });
+      this.group.remove(entry.group);
+      this.disposeObject(entry.group);
       this.buildingVisuals.delete(building.id);
     }
 

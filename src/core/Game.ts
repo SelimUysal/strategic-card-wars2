@@ -168,9 +168,15 @@ export class Game {
       this.cameraController.resize(width, height);
     });
 
-    // Her karede kamera kontrollerini güncelle ve sahneyi çiz
+    // Her karede kamera kontrollerini ve birim/bina can barı göstergelerini güncelle ve sahneyi çiz
     this.gameLoop.addFrameListener((realDt: number) => {
       this.cameraController.update(realDt);
+      if (this.unitOverlay && this.buildingManager && this.unitManager) {
+        this.unitOverlay.update(
+          this.unitManager.getUnits(),
+          this.buildingManager.getBuildings()
+        );
+      }
     });
 
     this.gameLoop.setRenderCallback(() => {

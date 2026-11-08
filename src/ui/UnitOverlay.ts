@@ -3,8 +3,10 @@ import { CameraController } from '../core/CameraController';
 import { UNITS } from '../data/units';
 import { Team, UnitId } from '../types';
 import { Unit } from '../units/Unit';
+import { Building } from '../buildings/Building';
 import { FogOfWar } from '../world/FogOfWar';
 import { UnitModels } from '../render/UnitModels';
+import { BuildingModels } from '../render/BuildingModels';
 
 export class UnitOverlay {
   private group: THREE.Group;
@@ -15,6 +17,15 @@ export class UnitOverlay {
   private barFillGreenMesh: THREE.InstancedMesh;
   private barFillYellowMesh: THREE.InstancedMesh;
   private barFillRedMesh: THREE.InstancedMesh;
+
+  // Binalar için can çubuğu InstancedMesh nesneleri
+  private buildingBarBgMesh: THREE.InstancedMesh;
+  private buildingBarFillGreenMesh: THREE.InstancedMesh;
+  private buildingBarFillYellowMesh: THREE.InstancedMesh;
+  private buildingBarFillRedMesh: THREE.InstancedMesh;
+  private readonly MAX_BUILDING_INSTANCES = 80;
+  private buildingBgGeom!: THREE.BufferGeometry;
+  private buildingFillGeom!: THREE.BufferGeometry;
 
   // Rozetler için tek doku atlası ve InstancedMesh koleksiyonu (S2, S3)
   private atlasTexture: THREE.CanvasTexture;
@@ -139,6 +150,35 @@ export class UnitOverlay {
     this.barFillRedMesh.frustumCulled = false;
     this.barFillRedMesh.count = 0;
     this.group.add(this.barFillRedMesh);
+
+    // Binalar için can çubuğu InstancedMesh nesneleri
+    this.buildingBgGeom = new THREE.PlaneGeometry(1.6, 0.16);
+    this.buildingBarBgMesh = new THREE.InstancedMesh(this.buildingBgGeom, bgMat, this.MAX_BUILDING_INSTANCES);
+    this.buildingBarBgMesh.renderOrder = 1005;
+    this.buildingBarBgMesh.frustumCulled = false;
+    this.buildingBarBgMesh.count = 0;
+    this.group.add(this.buildingBarBgMesh);
+
+    this.buildingFillGeom = new THREE.PlaneGeometry(1.52, 0.10);
+    this.buildingFillGeom.translate(0.76, 0, 0);
+
+    this.buildingBarFillGreenMesh = new THREE.InstancedMesh(this.buildingFillGeom, greenMat, this.MAX_BUILDING_INSTANCES);
+    this.buildingBarFillGreenMesh.renderOrder = 1006;
+    this.buildingBarFillGreenMesh.frustumCulled = false;
+    this.buildingBarFillGreenMesh.count = 0;
+    this.group.add(this.buildingBarFillGreenMesh);
+
+    this.buildingBarFillYellowMesh = new THREE.InstancedMesh(this.buildingFillGeom, yellowMat, this.MAX_BUILDING_INSTANCES);
+    this.buildingBarFillYellowMesh.renderOrder = 1006;
+    this.buildingBarFillYellowMesh.frustumCulled = false;
+    this.buildingBarFillYellowMesh.count = 0;
+    this.group.add(this.buildingBarFillYellowMesh);
+
+    this.buildingBarFillRedMesh = new THREE.InstancedMesh(this.buildingFillGeom, redMat, this.MAX_BUILDING_INSTANCES);
+    this.buildingBarFillRedMesh.renderOrder = 1006;
+    this.buildingBarFillRedMesh.frustumCulled = false;
+    this.buildingBarFillRedMesh.count = 0;
+    this.group.add(this.buildingBarFillRedMesh);
 
     // 3. Rozet InstancedMesh nesneleri (8 birim türü x 2 takım = 16 mesh) (S2, S3)
     this.initBadgeMeshes();
@@ -623,8 +663,8 @@ export class UnitOverlay {
     return UnitModels.modelHeight(defId);
   }
 
-  // SPEC S1 & S3: Her karede konum ve doluluk güncellemesi
-  public update(units: Unit[]): void {
+  // SPEC S1 & S3: Her karede konum ve doluluk güncellemesi (birimler ve binalar)
+  public update(units: Unit[], buildings: Building[] = []): void {
     const cam = this.cameraController.getCamera();
     this.dummyQuat.copy(cam.quaternion);
 
@@ -740,6 +780,49 @@ export class UnitOverlay {
       }
     }
 
+    // Binalar için can çubukları güncellemesi
+    let bBgCount = 0;
+    let bGreenCount = 0;
+    let bYellowCount = 0;
+    let bRedCount = 0;
+
+    for (const building of buildings) {
+      if (building.state === 'destroyed' || building.hp <= 0) continue;
+      if (this.fogOfWar && !this.fogOfWar.canPlayerSee(building)) continue;
+
+      const center = building.getCenter();
+      const topY = BuildingModels.buildingModelHeight(building.defId);
+      this.tempVec.set(center.x, topY + 0.35, center.y);
+      const bBarCenter = this.tempVec.clone().addScaledVector(this.screenUp, 0.15 * baseScale);
+
+      if (bBgCount < this.MAX_BUILDING_INSTANCES) {
+        this.dummyPos.copy(bBarCenter);
+        this.dummyScale.set(baseScale, baseScale, 1);
+        this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
+        this.buildingBarBgMesh.setMatrixAt(bBgCount++, this.dummyMatrix);
+      }
+
+      const ratio = Math.max(0, Math.min(1, building.hp / building.maxHp));
+      const bFillLeft = bBarCenter.clone().addScaledVector(this.screenRight, -0.76 * baseScale);
+      this.dummyPos.copy(bFillLeft);
+      this.dummyScale.set(ratio * baseScale, baseScale, 1);
+      this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
+
+      if (ratio > 0.60) {
+        if (bGreenCount < this.MAX_BUILDING_INSTANCES) {
+          this.buildingBarFillGreenMesh.setMatrixAt(bGreenCount++, this.dummyMatrix);
+        }
+      } else if (ratio >= 0.30) {
+        if (bYellowCount < this.MAX_BUILDING_INSTANCES) {
+          this.buildingBarFillYellowMesh.setMatrixAt(bYellowCount++, this.dummyMatrix);
+        }
+      } else {
+        if (bRedCount < this.MAX_BUILDING_INSTANCES) {
+          this.buildingBarFillRedMesh.setMatrixAt(bRedCount++, this.dummyMatrix);
+        }
+      }
+    }
+
     // Sayaçları ve matris güncellemelerini işle
     this.barBgMesh.count = bgCount;
     this.barBgMesh.instanceMatrix.needsUpdate = true;
@@ -752,6 +835,18 @@ export class UnitOverlay {
 
     this.barFillRedMesh.count = redCount;
     this.barFillRedMesh.instanceMatrix.needsUpdate = true;
+
+    this.buildingBarBgMesh.count = bBgCount;
+    this.buildingBarBgMesh.instanceMatrix.needsUpdate = true;
+
+    this.buildingBarFillGreenMesh.count = bGreenCount;
+    this.buildingBarFillGreenMesh.instanceMatrix.needsUpdate = true;
+
+    this.buildingBarFillYellowMesh.count = bYellowCount;
+    this.buildingBarFillYellowMesh.instanceMatrix.needsUpdate = true;
+
+    this.buildingBarFillRedMesh.count = bRedCount;
+    this.buildingBarFillRedMesh.instanceMatrix.needsUpdate = true;
 
     for (const [key, count] of badgeCounts.entries()) {
       const mesh = this.badgeMeshes.get(key);
@@ -774,6 +869,8 @@ export class UnitOverlay {
 
     this.bgGeom.dispose();
     this.fillGeom.dispose();
+    this.buildingBgGeom.dispose();
+    this.buildingFillGeom.dispose();
     for (const g of this.badgeGeoms) {
       g.dispose();
     }

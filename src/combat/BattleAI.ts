@@ -222,6 +222,12 @@ export class BattleAI {
         continue;
       }
 
+      // FIX: Çatışma halindeki (saldıran, hedefi olan veya saldırıya uğramış) birimleri formasyon yuvasına çekme!
+      if (unit.state === 'attacking' || unit.currentTargetId || unit.lastAttackerId) {
+        this.unitSlots.delete(unit.id);
+        continue;
+      }
+
       const rowIdx = Math.floor(i / MATCH_RULES.armyMaxColumns);
       const colIdx = i % MATCH_RULES.armyMaxColumns;
 
@@ -286,34 +292,38 @@ export class BattleAI {
   // SPEC S5(c): 'war' evresinde 'attack' modundaki askerlerin saldırı davranışı
   private applyWarAttackBehavior(soldier: Unit): void {
     if (soldier.state === 'dead') return;
+    // Eğer birim zaten saldırıyorsa, hareket ediyorsa veya bir hedefi varsa araya girme
+    if (soldier.state === 'attacking' || soldier.state === 'moving' || soldier.currentTargetId) {
+      return;
+    }
 
     const targetSelector = this.combatManager.getTargetSelector();
-    const currentTarget = targetSelector.selectTarget(soldier, [], [], 0);
+    // Düşman birimlerini ve binalarını alarak hedef kontrolü yap
+    const enemyTeam: Team = soldier.team === 'player' ? 'enemy' : 'player';
+    const enemyUnits = this.unitManager.getUnits(enemyTeam);
+    const currentTarget = targetSelector.selectTarget(soldier, enemyUnits, [], 0);
 
     if (!currentTarget) {
-      if (soldier.state !== 'moving') {
-        const enemyTeam: Team = soldier.team === 'player' ? 'enemy' : 'player';
-        const enemyHqTile = enemyTeam === 'player' ? this.map.playerStart : this.map.enemyStart;
-        const enemyHqRect = { x: enemyHqTile.x, y: enemyHqTile.y, w: 6, h: 6 };
+      const enemyHqTile = enemyTeam === 'player' ? this.map.playerStart : this.map.enemyStart;
+      const enemyHqRect = { x: enemyHqTile.x, y: enemyHqTile.y, w: 6, h: 6 };
 
-        let path = this.pathfinding.findPathToRect(
+      let path = this.pathfinding.findPathToRect(
+        { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
+        enemyHqRect,
+        1
+      );
+      if (!path || path.length === 0) {
+        // SPEC S3: HQ'ya tam yol yoksa en yakın ulaşılabilir kareye ilerle
+        path = this.pathfinding.findNearestReachablePathTowards(
           { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
-          enemyHqRect,
-          1
+          {
+            x: Math.floor(enemyHqRect.x + enemyHqRect.w / 2),
+            y: Math.floor(enemyHqRect.y + enemyHqRect.h / 2),
+          }
         );
-        if (!path || path.length === 0) {
-          // SPEC S3: HQ'ya tam yol yoksa en yakın ulaşılabilir kareye ilerle
-          path = this.pathfinding.findNearestReachablePathTowards(
-            { x: Math.floor(soldier.pos.x), y: Math.floor(soldier.pos.y) },
-            {
-              x: Math.floor(enemyHqRect.x + enemyHqRect.w / 2),
-              y: Math.floor(enemyHqRect.y + enemyHqRect.h / 2),
-            }
-          );
-        }
-        if (path && path.length > 0) {
-          soldier.setPath(path);
-        }
+      }
+      if (path && path.length > 0) {
+        soldier.setPath(path);
       }
     }
   }
