@@ -1,3 +1,4 @@
+import { BuildingManager } from '../buildings/BuildingManager';
 import { EventManager } from '../core/EventManager';
 import { MATCH_RULES } from '../data/matchRules';
 import { Team, TilePos, UnitId } from '../types';
@@ -29,7 +30,8 @@ export class WorkerManager {
     private resourceManager: ResourceManager,
     private unitManager: UnitManager,
     private modifierRegistry?: ModifierRegistry,
-    private eventManager?: EventManager
+    private eventManager?: EventManager,
+    private buildingManager?: BuildingManager
   ) {
     if (this.unitManager.setPathfinding) {
       this.unitManager.setPathfinding(this.pathfinding);
@@ -48,6 +50,10 @@ export class WorkerManager {
         this.unregisterWorker(unit.id);
       });
     }
+  }
+
+  public setBuildingManager(bm: BuildingManager): void {
+    this.buildingManager = bm;
   }
 
   // SPEC S2: maç başında her takım için MATCH_RULES.startWorkers kadar işçi (1 altın madencisi, 1 oduncu)
@@ -95,10 +101,61 @@ export class WorkerManager {
     return walkable ? walkable : { x: hqStart.x + 6, y: hqStart.y + 2 };
   }
 
+  private findHqEdgeTile(team: Team, fromTile: TilePos): TilePos {
+    let hqPos: TilePos = team === 'player' ? this.map.playerStart : this.map.enemyStart;
+    let width = 6;
+    let height = 6;
+
+    if (this.buildingManager) {
+      const hq = this.buildingManager.getHq(team);
+      if (hq && hq.state !== 'destroyed') {
+        const rect = hq.getRect();
+        hqPos = { x: rect.x, y: rect.y };
+        width = rect.w;
+        height = rect.h;
+      }
+    }
+
+    const perimeter: TilePos[] = [];
+    for (let x = hqPos.x - 1; x <= hqPos.x + width; x++) {
+      perimeter.push({ x, y: hqPos.y - 1 });
+      perimeter.push({ x, y: hqPos.y + height });
+    }
+    for (let y = hqPos.y; y < hqPos.y + height; y++) {
+      perimeter.push({ x: hqPos.x - 1, y });
+      perimeter.push({ x: hqPos.x + width, y });
+    }
+
+    const walkablePerimeter = perimeter.filter(p => this.pathfinding.isWalkable(p.x, p.y));
+    if (walkablePerimeter.length === 0) {
+      const fallback = this.pathfinding.findNearestWalkableTile({
+        x: hqPos.x + Math.floor(width / 2),
+        y: hqPos.y + Math.floor(height / 2),
+      });
+      return fallback || hqPos;
+    }
+
+    let best = walkablePerimeter[0];
+    let minDistSq = Infinity;
+    for (const p of walkablePerimeter) {
+      const distSq = (p.x - fromTile.x) ** 2 + (p.y - fromTile.y) ** 2;
+      if (distSq < minDistSq) {
+        minDistSq = distSq;
+        best = p;
+      }
+    }
+
+    return best;
+  }
+
   public registerWorker(unit: Unit): void {
     if (this.workers.has(unit.id)) return;
 
     const type: 'gold' | 'wood' = unit.defId === 'altin_madencisi' ? 'gold' : 'wood';
+    unit.carriedType = type;
+    unit.carriedAmount = 0;
+    unit.workerState = 'toNode';
+
     const state: WorkerState = {
       unit,
       type,
@@ -113,6 +170,13 @@ export class WorkerManager {
   public unregisterWorker(workerId: string): void {
     const state = this.workers.get(workerId);
     if (!state) return;
+
+    // SPEC S4: İşçi ölünce taşıdığı yük yok olur
+    if (state.unit) {
+      state.unit.carriedAmount = 0;
+      state.unit.carriedType = null;
+      state.unit.workerState = 'toNode';
+    }
 
     if (state.assignedNodeId) {
       const node = this.findNodeById(state.assignedNodeId);
@@ -158,7 +222,7 @@ export class WorkerManager {
     return count;
   }
 
-  // SPEC S2: Otomatik toplama, yürüyüş ve yenilenme atamaları
+  // SPEC S2, S3, S4, S5: 4 aşamalı işçi döngüsü: toNode -> gathering -> returning -> depositing
   public update(dt: number): void {
     this.reassignTimer += dt;
     const shouldCheckReassign = this.reassignTimer >= this.REASSIGN_INTERVAL_SEC;
@@ -171,57 +235,126 @@ export class WorkerManager {
     for (const [id, state] of this.workers.entries()) {
       const unit = state.unit;
 
-      // Ölü kontrolü
+      // SPEC S4: Ölü kontrolü - yük yok olur
       if (unit.state === 'dead' || unit.hp <= 0) {
+        unit.carriedAmount = 0;
+        unit.carriedType = null;
         deadWorkers.push(id);
         continue;
       }
 
-      // Atanmış nokta kontrolü
-      let node: ResourceNode | null = null;
-      if (state.assignedNodeId) {
-        node = this.findNodeById(state.assignedNodeId);
-        // Nokta tükenmişse atamayı boşa çıkar
+      const workerTile = {
+        x: Math.floor(unit.pos.x),
+        y: Math.floor(unit.pos.y),
+      };
+
+      if (!unit.workerState) {
+        unit.workerState = 'toNode';
+      }
+
+      // FAZ: RETURNING (HQ'ya yürüme)
+      if (unit.workerState === 'returning') {
+        const hqEdge = this.findHqEdgeTile(unit.team, workerTile);
+        const distToHqEdge = Math.max(
+          Math.abs(workerTile.x - hqEdge.x),
+          Math.abs(workerTile.y - hqEdge.y)
+        );
+
+        if (distToHqEdge <= 1 || (workerTile.x === hqEdge.x && workerTile.y === hqEdge.y)) {
+          unit.workerState = 'depositing';
+        } else {
+          if (unit.state !== 'moving') {
+            const path = this.pathfinding.findPath(workerTile, hqEdge);
+            if (path && path.length > 0) {
+              unit.setPath(path);
+            } else {
+              // SPEC S4: Karargâha giden yol kapalıysa işçi durur (idle)
+              unit.state = 'idle';
+            }
+          }
+          continue;
+        }
+      }
+
+      // FAZ: DEPOSITING (Stoğa ekleme ve istatistik)
+      if (unit.workerState === 'depositing') {
+        // SPEC S2 & S5: Kaynak YALNIZCA teslim anında stoğa ve 'toplanan' istatistiğine eklenir
+        if (unit.carriedAmount > 0 && unit.carriedType) {
+          this.resourceManager.add(unit.team, unit.carriedType, unit.carriedAmount, true);
+          unit.carriedAmount = 0;
+        }
+
+        state.gatherAccumulator = 0;
+        unit.workerState = 'toNode';
+
+        let node: ResourceNode | null = state.assignedNodeId
+          ? this.findNodeById(state.assignedNodeId)
+          : null;
         if (!node || node.reserve <= 0) {
           if (node) {
             this.resourceNodes.releaseWorker(node, unit.id);
           }
           state.assignedNodeId = null;
-          state.gatherAccumulator = 0;
+          this.assignWorkerToNode(state);
+        }
+      }
+
+      // FAZ: TO_NODE & GATHERING
+      let node: ResourceNode | null = null;
+      if (state.assignedNodeId) {
+        node = this.findNodeById(state.assignedNodeId);
+        if (!node || node.reserve <= 0) {
+          if (node) {
+            this.resourceNodes.releaseWorker(node, unit.id);
+          }
+          state.assignedNodeId = null;
           node = null;
         }
       }
 
-      // Atanmış noktası yoksa en yakın boş noktayı ara
+      // Atanmış noktası yoksa veya bittiyse
       if (!node) {
-        this.assignWorkerToNode(state);
-        node = state.assignedNodeId ? this.findNodeById(state.assignedNodeId) : null;
+        // SPEC S3: Üzerinde henüz teslim edilmemiş yük varsa ÖNCE HQ'ya git
+        if (unit.carriedAmount > 0) {
+          unit.workerState = 'returning';
+          continue;
+        } else {
+          this.assignWorkerToNode(state);
+          node = state.assignedNodeId ? this.findNodeById(state.assignedNodeId) : null;
+        }
       }
 
-      // Hâlâ boş nokta yoksa beklemede kal
+      // Hâlâ nokta yoksa
       if (!node) {
-        if (unit.state === 'gathering') {
-          unit.state = 'idle';
+        if (unit.carriedAmount > 0) {
+          unit.workerState = 'returning';
+        } else {
+          unit.workerState = 'toNode';
+          if (unit.state === 'gathering') {
+            unit.state = 'idle';
+          }
         }
         continue;
       }
 
-      // SPEC S6: İşçiler aynı noktada farklı yanlarda durur (her işçi atandığı yuva için farklı yaklaşma karesi alır)
       const approachTile = this.getApproachTileForWorker(node, unit.id);
       const isAtApproachTile =
-        Math.floor(unit.pos.x) === approachTile.x && Math.floor(unit.pos.y) === approachTile.y;
+        workerTile.x === approachTile.x && workerTile.y === approachTile.y;
+      const distToNode = Math.max(
+        Math.abs(workerTile.x - node.tile.x),
+        Math.abs(workerTile.y - node.tile.y)
+      );
 
-      // Alternatif: eğer hedefe 1 mesafe yakınsa ve yaklaşma karesi ulaşılamıyorsa
-      const ux = Math.floor(unit.pos.x);
-      const uy = Math.floor(unit.pos.y);
-      const distToNode = Math.max(Math.abs(ux - node.tile.x), Math.abs(uy - node.tile.y));
-
-      if (isAtApproachTile || (distToNode <= 1 && unit.state === 'gathering')) {
-        // Noktaya ulaşıldı: toplama moduna geç
+      if (isAtApproachTile || (distToNode <= 1 && unit.workerState === 'gathering')) {
+        // Noktaya ulaşıldı: GATHERING
+        unit.workerState = 'gathering';
         unit.state = 'gathering';
-        unit.rotationY = Math.atan2(node.tile.x + 0.5 - unit.pos.x, node.tile.y + 0.5 - unit.pos.y);
+        unit.rotationY = Math.atan2(
+          node.tile.x + 0.5 - unit.pos.x,
+          node.tile.y + 0.5 - unit.pos.y
+        );
 
-        // SPEC S2: Saniyede MATCH_RULES.gatherPerSecPerWorker x UnitStats.getGatherMult(team) kaynak çıkarılır
+        // SPEC S1 & S5: gatherPerSecPerWorker (3) x gatherRate çarpanı
         const mult = this.modifierRegistry
           ? this.modifierRegistry.getGatherMult(unit.team)
           : 1;
@@ -229,38 +362,40 @@ export class WorkerManager {
         state.gatherAccumulator += rate * dt;
 
         if (state.gatherAccumulator >= 1) {
-          const extractAmount = Math.floor(state.gatherAccumulator);
-          const actualExtracted = this.resourceNodes.extract(node, extractAmount);
+          const wantExtract = Math.floor(state.gatherAccumulator);
+          const spaceLeft = MATCH_RULES.workerCarryCapacity - unit.carriedAmount;
+          const extractAmount = Math.min(wantExtract, spaceLeft);
 
-          if (actualExtracted > 0) {
-            // SPEC S2: Doğrudan takımın stoğuna eklenir (taşıma yürüyüşü yok) [EK]
-            this.resourceManager.add(unit.team, state.type, actualExtracted, true);
+          if (spaceLeft > 0) {
+            const actualExtracted = this.resourceNodes.extract(node, extractAmount);
+            if (actualExtracted > 0) {
+              unit.carriedAmount += actualExtracted;
+              unit.carriedType = state.type;
+            }
           }
 
-          state.gatherAccumulator -= extractAmount;
+          state.gatherAccumulator -= wantExtract;
 
-          // Nokta bu çıkarma ile tükendiyse
-          if (node.reserve <= 0) {
-            state.assignedNodeId = null;
-            state.gatherAccumulator = 0;
-            this.assignWorkerToNode(state);
+          // SPEC S2 & S3: Kapasite (30) doldu mu veya nokta bitti mi? HQ'ya dön!
+          if (unit.carriedAmount >= MATCH_RULES.workerCarryCapacity || node.reserve <= 0) {
+            unit.workerState = 'returning';
+            if (node.reserve <= 0) {
+              this.resourceNodes.releaseWorker(node, unit.id);
+              state.assignedNodeId = null;
+            }
           }
         }
       } else {
-        // Henüz yaklaşma karesinde değil: yol bul ve yaklaşma karesine yürü
+        // Henüz nokta yanında değil: toNode yürü
+        unit.workerState = 'toNode';
         if (unit.state !== 'moving') {
-          const path = this.pathfinding.findPath(
-            { x: ux, y: uy },
-            approachTile
-          );
-
+          const path = this.pathfinding.findPath(workerTile, approachTile);
           if (path && path.length > 0) {
             unit.setPath(path);
           } else if (distToNode <= 1) {
-            // Yanındaysa doğrudan toplamaya başla
+            unit.workerState = 'gathering';
             unit.state = 'gathering';
           } else {
-            // Yürünemiyorsa atamayı serbest bırak ve boşta bekle
             this.resourceNodes.releaseWorker(node, unit.id);
             state.assignedNodeId = null;
             unit.state = 'idle';
@@ -278,14 +413,13 @@ export class WorkerManager {
   private getApproachTileForWorker(node: ResourceNode, workerId: string): TilePos {
     const slotIdx = this.resourceNodes.getWorkerSlotIndex(node, workerId);
 
-    // Karşıt yön çiftleri (örneğin Batı/Doğu veya Kuzey/Güney)
     const sidesPair1: [TilePos, TilePos] = [
-      { x: node.tile.x - 1, y: node.tile.y }, // Batı
-      { x: node.tile.x + 1, y: node.tile.y }, // Doğu
+      { x: node.tile.x - 1, y: node.tile.y },
+      { x: node.tile.x + 1, y: node.tile.y },
     ];
     const sidesPair2: [TilePos, TilePos] = [
-      { x: node.tile.x, y: node.tile.y - 1 }, // Kuzey
-      { x: node.tile.x, y: node.tile.y + 1 }, // Güney
+      { x: node.tile.x, y: node.tile.y - 1 },
+      { x: node.tile.x, y: node.tile.y + 1 },
     ];
 
     if (
@@ -302,7 +436,6 @@ export class WorkerManager {
       return slotIdx === 0 ? sidesPair2[0] : sidesPair2[1];
     }
 
-    // Yürünebilir komşulardan birini al
     const allNeighbors: TilePos[] = [
       sidesPair1[0], sidesPair1[1], sidesPair2[0], sidesPair2[1],
       { x: node.tile.x - 1, y: node.tile.y - 1 },
@@ -356,3 +489,4 @@ export class WorkerManager {
     return null;
   }
 }
+

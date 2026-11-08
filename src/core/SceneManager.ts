@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { Atmosphere, QualityProfile } from '../render/Atmosphere';
 
 export class SceneManager {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
+  private atmosphere: Atmosphere;
   private resizeListener: () => void;
   private onResizeCallbacks: Set<(width: number, height: number) => void> = new Set();
 
@@ -17,14 +19,9 @@ export class SceneManager {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio));
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x121214);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-    this.scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    directionalLight.position.set(30, 50, 40);
-    this.scene.add(directionalLight);
+    // SPEC S2, S3, S4, S6: Atmosphere (Gökyüzü, sis, ışıklar, sahte gölge, kalite profili)
+    this.atmosphere = new Atmosphere(this.scene, this.renderer);
 
     this.resizeListener = () => {
       this.handleResize();
@@ -55,6 +52,8 @@ export class SceneManager {
   }
 
   public render(camera: THREE.Camera): void {
+    // S2 & S4: Sis ve gölgeleri güncelle
+    this.atmosphere.update(camera);
     this.renderer.render(this.scene, camera);
   }
 
@@ -66,9 +65,19 @@ export class SceneManager {
     return this.renderer;
   }
 
+  public getAtmosphere(): Atmosphere {
+    return this.atmosphere;
+  }
+
+  public getQualityProfile(): QualityProfile {
+    return this.atmosphere.getQualityProfile();
+  }
+
   public destroy(): void {
     window.removeEventListener('resize', this.resizeListener);
     window.removeEventListener('orientationchange', this.resizeListener);
+    this.atmosphere.destroy();
     this.renderer.dispose();
   }
 }
+

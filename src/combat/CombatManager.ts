@@ -117,6 +117,28 @@ export class CombatManager {
     allUnits: Unit[],
     allBuildings: Building[]
   ): void {
+    // R11E: Olay tabanlı efektler için 'attackPerformed' yayını (hasar mantığı veya zamanlaması değişmez)
+    if (this.eventManager) {
+      let attackType: 'melee' | 'arrow' | 'cannon' | 'stone' | 'ship' = 'melee';
+      if (attacker.defId === 'tirendaz' || attacker.defId === 'hisar') {
+        attackType = 'arrow';
+      } else if (attacker.defId === 'sahi') {
+        attackType = 'cannon';
+      } else if (attacker.defId === 'fetih_gemisi') {
+        attackType = 'ship';
+      } else if (attacker.defId === 'mancinik_i_azam') {
+        attackType = 'stone';
+      }
+
+      this.eventManager.emit('attackPerformed', {
+        attackerId: attacker.id,
+        targetId: target.id,
+        attackerPos: attacker.getCenter(),
+        targetPos: target.getCenter(),
+        type: attackType,
+      });
+    }
+
     const isMancinik = attacker.defId === 'mancinik_i_azam';
 
     if (isMancinik) {

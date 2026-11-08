@@ -7,19 +7,41 @@ import { GameMap } from '../world/MapConfig';
 import { Pathfinding } from '../world/Pathfinding';
 import { ModifierRegistry } from '../units/UnitStats';
 import { Building, BuildingState } from './Building';
+import { BuildingModels } from '../render/BuildingModels';
+
+interface BuildingVisualEntry {
+  group: THREE.Group;
+  modelGroup: THREE.Group;
+  scaffoldGroup: THREE.Group;
+  lastState: BuildingState;
+  currentDamageStage: 'normal' | 'damaged' | 'heavy';
+  originalColors: Map<THREE.Mesh, THREE.Color>;
+}
+
+interface CollapsingBuilding {
+  visual: THREE.Group;
+  timer: number;
+  w: number;
+  h: number;
+  position: THREE.Vector3;
+}
+
+interface RubbleEntry {
+  group: THREE.Group;
+  age: number;
+}
 
 export class BuildingManager {
   private buildings: Map<string, Building> = new Map();
-  private buildingVisuals: Map<string, THREE.Group> = new Map();
+  private buildingVisuals: Map<string, BuildingVisualEntry> = new Map();
+  private collapsingBuildings: CollapsingBuilding[] = [];
+  private rubbles: RubbleEntry[] = [];
   private nextBuildingId: number = 1;
 
   // Çizim grubu
   private group: THREE.Group;
   private playerTeamHex: number = 0x2563eb;
   private enemyTeamHex: number = 0xdc2626;
-
-  // Paylaşılan geometriler
-  private geometries: Map<string, THREE.BufferGeometry> = new Map();
 
   constructor(
     private map: GameMap,
@@ -29,7 +51,6 @@ export class BuildingManager {
     private fogOfWar?: FogOfWar
   ) {
     this.group = new THREE.Group();
-    this.initGeometries();
 
     // SPEC S1: Bonus eklenince veya kalkınca varlıkların maksimum canı değişir ve mevcut can ORANI korunur [EK]
     if (this.modifierRegistry) {
@@ -53,13 +74,17 @@ export class BuildingManager {
     this.enemyTeamHex = typeof enemyHex === 'string' ? parseInt(enemyHex.replace('#', ''), 16) : enemyHex;
 
     // Mevcut binaların takım renk parçalarını güncelle
-    for (const [id, visual] of this.buildingVisuals.entries()) {
+    for (const [id, entry] of this.buildingVisuals.entries()) {
       const b = this.buildings.get(id);
       if (!b) continue;
       const teamColor = b.team === 'player' ? this.playerTeamHex : this.enemyTeamHex;
-      visual.traverse((child) => {
+      entry.modelGroup.traverse((child) => {
         if (child instanceof THREE.Mesh && child.name === 'teamPart') {
-          (child.material as THREE.MeshStandardMaterial).color.set(teamColor);
+          if (child.material && 'color' in child.material) {
+            (child.material as THREE.MeshLambertMaterial).color.set(teamColor);
+            const orig = entry.originalColors.get(child);
+            if (orig) orig.set(teamColor);
+          }
         }
       });
     }
@@ -94,10 +119,10 @@ export class BuildingManager {
 
     this.buildings.set(id, building);
 
-    // Çizim görselini oluştur
-    const visual = this.createBuildingVisual(building);
-    this.buildingVisuals.set(id, visual);
-    this.group.add(visual);
+    // Çizim görselini oluştur (D1: iskele ve yükselen model ile)
+    const entry = this.createBuildingVisual(building);
+    this.buildingVisuals.set(id, entry);
+    this.group.add(entry.group);
 
     // Olay yayını
     if (this.eventManager) {
@@ -107,27 +132,30 @@ export class BuildingManager {
     return building;
   }
 
-  // SPEC S5: removeBuilding(building) (unblockRect)
+  // SPEC S5 & D3: removeBuilding(building)
+  // unblockRect hemen çağrılır; kareler anında serbest kalır. Bina 0.6 sn çöküp 4 sn enkaz bırakır.
   public removeBuilding(building: Building): void {
     if (!this.buildings.has(building.id)) return;
 
-    // Yürünemezliği kaldır
+    // D3: Kareleri hemen yürünebilir/inşa edilebilir yap (enkaz kuralları etkilemez)
     this.pathfinding.unblockRect(building.getRect());
 
     this.buildings.delete(building.id);
 
-    // Görseli kaldır ve temizle
-    const visual = this.buildingVisuals.get(building.id);
-    if (visual) {
-      this.group.remove(visual);
-      visual.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => m.dispose());
-          } else {
-            child.material.dispose();
-          }
-        }
+    // D3: Çizim görselini çökme animasyonu listesine al (0.6 sn sonra enkaza dönüşür)
+    const entry = this.buildingVisuals.get(building.id);
+    if (entry) {
+      entry.scaffoldGroup.visible = false;
+      const def = BUILDINGS[building.defId];
+      const w = def ? def.footprint.w : 4;
+      const h = def ? def.footprint.h : 4;
+
+      this.collapsingBuildings.push({
+        visual: entry.group,
+        timer: 0,
+        w,
+        h,
+        position: entry.group.position.clone(),
       });
       this.buildingVisuals.delete(building.id);
     }
@@ -135,7 +163,6 @@ export class BuildingManager {
     // Olay yayını
     if (this.eventManager) {
       this.eventManager.emit('buildingDestroyed', { building });
-      // Ana karargâh yıkılınca hqDestroyed (takımla) olayını yayınlar
       if (building.defId === 'hq') {
         this.eventManager.emit('hqDestroyed', { team: building.team, building });
       }
@@ -180,213 +207,217 @@ export class BuildingManager {
     return this.spawnBuilding('hq', team, startPos, 'active');
   }
 
-  // Çizim güncellemesi: inşaat yüksekliği artışı ve FogOfWar görünürlüğü
-  public update(_dt: number): void {
+  // D1-D5: Çizim güncellemesi: inşaat iskelesi ve yükselmesi, hasar aşamaları, çökme ve enkaz
+  public update(dt: number): void {
     const destroyed: Building[] = [];
 
     for (const building of this.buildings.values()) {
-      if (building.state === 'destroyed') {
+      if (building.state === 'destroyed' || building.hp <= 0) {
         destroyed.push(building);
         continue;
       }
 
-      const visual = this.buildingVisuals.get(building.id);
-      if (!visual) continue;
+      const entry = this.buildingVisuals.get(building.id);
+      if (!entry) continue;
 
-      // SPEC S5: FogOfWar.canPlayerSee(building) false ise çizilmez
+      // SPEC D5: FogOfWar.canPlayerSee(building) false ise çizilmez
       if (this.fogOfWar && !this.fogOfWar.canPlayerSee(building)) {
-        visual.visible = false;
+        entry.group.visible = false;
         continue;
       }
-      visual.visible = true;
+      entry.group.visible = true;
 
-      // SPEC S5: İnşaattaki bina yüksekliği ilerlemeyle artar [EK]
+      // SPEC D1: İnşaattaki bina: iskele görünür, model aşağıdan yukarı yükselir ve soluk görünür
       if (building.state === 'constructing') {
-        const progress = Math.max(0.1, Math.min(1.0, building.constructionProgress));
-        visual.scale.set(1, progress, 1);
+        entry.scaffoldGroup.visible = true;
+        const progress = Math.max(0.08, Math.min(1.0, building.constructionProgress));
+        entry.modelGroup.scale.set(1, progress, 1);
+
+        entry.modelGroup.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            child.material.transparent = true;
+            child.material.opacity = 0.72;
+          }
+        });
       } else {
-        visual.scale.set(1, 1, 1);
+        // Bina aktif: iskele kalkar, model tam boy ve opak görünür
+        entry.scaffoldGroup.visible = false;
+        entry.modelGroup.scale.set(1, 1, 1);
+
+        if (entry.lastState === 'constructing') {
+          entry.modelGroup.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.material) {
+              child.material.opacity = 1.0;
+              child.material.transparent = false;
+            }
+          });
+        }
+
+        // SPEC D2: Hasar aşamaları (can >= %50 normal, %25-%50 yıpranmış, < %25 ağır hasar)
+        const hpRatio = building.hp / building.maxHp;
+        const newStage: 'normal' | 'damaged' | 'heavy' =
+          hpRatio >= 0.5 ? 'normal' : hpRatio >= 0.25 ? 'damaged' : 'heavy';
+
+        if (newStage !== entry.currentDamageStage) {
+          entry.currentDamageStage = newStage;
+          this.applyDamageStageVisuals(entry, newStage);
+        }
       }
+
+      entry.lastState = building.state;
     }
 
+    // Yıkılan binaları kaldır
     for (const b of destroyed) {
       this.removeBuilding(b);
     }
-  }
 
-  private static sharedGeometries: Map<string, THREE.BufferGeometry> = new Map();
+    // SPEC D3: Çöken binaların animasyonu (0.6 sn çökme: scale.y 1 -> 0.25, hafif eğilme)
+    for (let i = this.collapsingBuildings.length - 1; i >= 0; i--) {
+      const col = this.collapsingBuildings[i];
+      col.timer += dt;
+      const progress = Math.min(1.0, col.timer / 0.6);
 
-  private static getSharedGeometries(): Map<string, THREE.BufferGeometry> {
-    if (this.sharedGeometries.size === 0) {
-      // HQ: 6x6 tabanlı saray / kale yapısı
-      this.sharedGeometries.set('hq_base', new THREE.BoxGeometry(5.2, 2.2, 5.2));
-      this.sharedGeometries.set('hq_roof', new THREE.ConeGeometry(2.2, 1.4, 4));
+      col.visual.scale.set(1.0, 1.0 - progress * 0.75, 1.0);
+      col.visual.rotation.z = progress * 0.15;
+      col.visual.rotation.x = -progress * 0.08;
 
-      // Standart Kışlalar: 4x4
-      this.sharedGeometries.set('barracks_base', new THREE.BoxGeometry(3.4, 1.6, 3.4));
-      this.sharedGeometries.set('barracks_roof', new THREE.BoxGeometry(3.6, 0.35, 3.6));
+      if (col.timer >= 0.6) {
+        // Bina görselini sahneden kaldır
+        this.group.remove(col.visual);
+        this.disposeObject(col.visual);
 
-      // Tersane: 5x5 daha geniş
-      this.sharedGeometries.set('tersane_base', new THREE.BoxGeometry(4.4, 1.2, 4.4));
-      this.sharedGeometries.set('tersane_roof', new THREE.BoxGeometry(4.6, 0.3, 4.6));
+        // Yerinde 4 saniye sürecek enkaz modelini bırak
+        const rubble = BuildingModels.createRubbleModel(col.w, col.h);
+        rubble.position.copy(col.position);
+        this.group.add(rubble);
+        this.rubbles.push({ group: rubble, age: 0 });
 
-      // Hisar: 3x3 silindir kule
-      this.sharedGeometries.set('hisar_tower', new THREE.CylinderGeometry(1.2, 1.35, 2.6, 12));
-      this.sharedGeometries.set('hisar_top', new THREE.CylinderGeometry(1.4, 1.4, 0.4, 12));
-
-      // Mancınık-ı Azam: 4x4 kutu ve atış kolu
-      this.sharedGeometries.set('mancinik_base', new THREE.BoxGeometry(3.0, 0.8, 3.0));
-      const armGeom = new THREE.BoxGeometry(0.35, 0.35, 2.4);
-      armGeom.rotateX(-Math.PI / 4);
-      this.sharedGeometries.set('mancinik_arm', armGeom);
+        this.collapsingBuildings.splice(i, 1);
+      }
     }
-    return this.sharedGeometries;
+
+    // SPEC D3: Enkazların 4 saniye sonra solarak kalkması (son 1 sn fade out)
+    for (let i = this.rubbles.length - 1; i >= 0; i--) {
+      const r = this.rubbles[i];
+      r.age += dt;
+
+      if (r.age > 3.0) {
+        const fade = Math.max(0, (4.0 - r.age) / 1.0);
+        r.group.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            child.material.transparent = true;
+            child.material.opacity = fade * 0.95;
+          }
+        });
+      }
+
+      if (r.age >= 4.0) {
+        this.group.remove(r.group);
+        this.disposeObject(r.group);
+        this.rubbles.splice(i, 1);
+      }
+    }
   }
 
-  // SPEC S1: Ortak üretici fonksiyon: GERÇEK bina model geometrisini dışa açar
+  // D2: Hasar aşaması görseli uygulama (koyulaşma ve hafif eğilme)
+  private applyDamageStageVisuals(
+    entry: BuildingVisualEntry,
+    stage: 'normal' | 'damaged' | 'heavy'
+  ): void {
+    const darkenFactor = stage === 'normal' ? 1.0 : stage === 'damaged' ? 0.82 : 0.65;
+    const tiltZ = stage === 'normal' ? 0 : stage === 'damaged' ? 0.02 : 0.045;
+    const tiltX = stage === 'normal' ? 0 : stage === 'damaged' ? -0.015 : -0.035;
+
+    entry.modelGroup.rotation.set(tiltX, 0, tiltZ);
+
+    entry.modelGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material && 'color' in child.material) {
+        const orig = entry.originalColors.get(child);
+        if (orig) {
+          (child.material as THREE.MeshLambertMaterial).color.copy(orig).multiplyScalar(darkenFactor);
+        }
+      }
+    });
+  }
+
+  private createBuildingVisual(building: Building): BuildingVisualEntry {
+    const def = BUILDINGS[building.defId];
+    const w = def ? def.footprint.w : 4;
+    const h = def ? def.footprint.h : 4;
+    const height = BuildingModels.buildingModelHeight(building.defId);
+    const teamColor = building.team === 'player' ? this.playerTeamHex : this.enemyTeamHex;
+
+    const group = new THREE.Group();
+    group.name = `building_${building.id}`;
+
+    const modelGroup = BuildingModels.createBuildingVisualModel(building.defId, undefined, teamColor);
+    const scaffoldGroup = BuildingModels.createScaffoldModel(w, h, height);
+
+    group.add(modelGroup);
+    group.add(scaffoldGroup);
+
+    const center = building.getCenter();
+    group.position.set(center.x, 0, center.y);
+
+    scaffoldGroup.visible = building.state === 'constructing';
+
+    const originalColors = new Map<THREE.Mesh, THREE.Color>();
+    modelGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material && 'color' in child.material) {
+        originalColors.set(child, (child.material as THREE.MeshLambertMaterial).color.clone());
+      }
+    });
+
+    return {
+      group,
+      modelGroup,
+      scaffoldGroup,
+      lastState: building.state,
+      currentDamageStage: 'normal',
+      originalColors,
+    };
+  }
+
+  // SPEC S1 / R5: Dışa açılan ortak üretici fonksiyon (BuildingModels'a delege eder)
   public static createBuildingVisualModel(
     defId: BuildingId,
     overrideMaterial?: THREE.Material,
     teamColor: number = 0x2563eb
   ): THREE.Group {
-    const visual = new THREE.Group();
-    const geoms = BuildingManager.getSharedGeometries();
-
-    const stoneMat = overrideMaterial || new THREE.MeshStandardMaterial({
-      color: 0x8a8479,
-      roughness: 0.7,
-      metalness: 0.1,
-    });
-    const woodMat = overrideMaterial || new THREE.MeshStandardMaterial({
-      color: 0x6e4a2d,
-      roughness: 0.8,
-    });
-    const teamMat = overrideMaterial || new THREE.MeshStandardMaterial({
-      color: teamColor,
-      roughness: 0.4,
-      metalness: 0.2,
-    });
-
-    switch (defId) {
-      case 'hq': {
-        const base = new THREE.Mesh(geoms.get('hq_base'), stoneMat);
-        base.position.y = 1.1;
-        base.castShadow = true;
-        base.receiveShadow = true;
-        visual.add(base);
-
-        const roof = new THREE.Mesh(geoms.get('hq_roof'), teamMat);
-        roof.name = 'teamPart';
-        roof.position.y = 2.2 + 0.7;
-        roof.rotation.y = Math.PI / 4;
-        roof.castShadow = true;
-        visual.add(roof);
-        break;
-      }
-
-      case 'hisar': {
-        const tower = new THREE.Mesh(geoms.get('hisar_tower'), stoneMat);
-        tower.position.y = 1.3;
-        tower.castShadow = true;
-        tower.receiveShadow = true;
-        visual.add(tower);
-
-        const top = new THREE.Mesh(geoms.get('hisar_top'), teamMat);
-        top.name = 'teamPart';
-        top.position.y = 2.6 + 0.2;
-        top.castShadow = true;
-        visual.add(top);
-        break;
-      }
-
-      case 'tersane': {
-        const base = new THREE.Mesh(geoms.get('tersane_base'), woodMat);
-        base.position.y = 0.6;
-        base.castShadow = true;
-        base.receiveShadow = true;
-        visual.add(base);
-
-        const roof = new THREE.Mesh(geoms.get('tersane_roof'), teamMat);
-        roof.name = 'teamPart';
-        roof.position.y = 1.2 + 0.15;
-        roof.castShadow = true;
-        visual.add(roof);
-        break;
-      }
-
-      case 'mancinik_i_azam': {
-        const base = new THREE.Mesh(geoms.get('mancinik_base'), woodMat);
-        base.position.y = 0.4;
-        base.castShadow = true;
-        base.receiveShadow = true;
-        visual.add(base);
-
-        const arm = new THREE.Mesh(geoms.get('mancinik_arm'), teamMat);
-        arm.name = 'teamPart';
-        arm.position.set(0, 0.8, 0);
-        arm.castShadow = true;
-        visual.add(arm);
-        break;
-      }
-
-      default: {
-        const base = new THREE.Mesh(geoms.get('barracks_base'), stoneMat);
-        base.position.y = 0.8;
-        base.castShadow = true;
-        base.receiveShadow = true;
-        visual.add(base);
-
-        const roof = new THREE.Mesh(geoms.get('barracks_roof'), teamMat);
-        roof.name = 'teamPart';
-        roof.position.y = 1.6 + 0.17;
-        roof.castShadow = true;
-        visual.add(roof);
-        break;
-      }
-    }
-
-    visual.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.frustumCulled = false;
-      }
-    });
-
-    return visual;
-  }
-
-  private initGeometries(): void {
-    BuildingManager.getSharedGeometries();
-  }
-
-  private createBuildingVisual(building: Building): THREE.Group {
-    const teamColor = building.team === 'player' ? this.playerTeamHex : this.enemyTeamHex;
-    const visual = BuildingManager.createBuildingVisualModel(building.defId, undefined, teamColor);
-    const center = building.getCenter();
-    visual.position.set(center.x, 0, center.y);
-    return visual;
+    return BuildingModels.createBuildingVisualModel(defId, overrideMaterial, teamColor);
   }
 
   public getGroup(): THREE.Group {
     return this.group;
   }
 
-  public dispose(): void {
-    for (const visual of this.buildingVisuals.values()) {
-      visual.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => m.dispose());
-          } else {
-            child.material.dispose();
-          }
+  private disposeObject(obj: THREE.Object3D): void {
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (child.geometry) child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else if (child.material) {
+          child.material.dispose();
         }
-      });
+      }
+    });
+  }
+
+  public dispose(): void {
+    for (const entry of this.buildingVisuals.values()) {
+      this.disposeObject(entry.group);
     }
-    for (const geom of this.geometries.values()) {
-      geom.dispose();
+    for (const col of this.collapsingBuildings) {
+      this.disposeObject(col.visual);
     }
-    this.geometries.clear();
+    for (const r of this.rubbles) {
+      this.disposeObject(r.group);
+    }
     this.buildingVisuals.clear();
+    this.collapsingBuildings = [];
+    this.rubbles = [];
     this.buildings.clear();
     this.group.clear();
   }

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { MATCH_RULES } from '../data/matchRules';
+import { NatureModels } from '../render/NatureModels';
+import { PALETTE } from '../render/Palette';
 import { Team, TilePos } from '../types';
 import { GameMap, ResourceNodeData } from './MapConfig';
 
@@ -19,13 +21,21 @@ export class ResourceNodes {
   private nodes: ResourceNode[] = [];
   private group: THREE.Group;
 
+  // Aktif ve tükenmiş InstancedMesh nesneleri (S10)
   private goldInstancedMesh: THREE.InstancedMesh | null = null;
   private woodInstancedMesh: THREE.InstancedMesh | null = null;
+  private depletedGoldInstancedMesh: THREE.InstancedMesh | null = null;
+  private depletedWoodInstancedMesh: THREE.InstancedMesh | null = null;
 
   private goldGeometry: THREE.BufferGeometry | null = null;
   private woodGeometry: THREE.BufferGeometry | null = null;
+  private depletedGoldGeometry: THREE.BufferGeometry | null = null;
+  private depletedWoodGeometry: THREE.BufferGeometry | null = null;
+
   private goldMaterial: THREE.Material | null = null;
   private woodMaterial: THREE.Material | null = null;
+  private depletedGoldMaterial: THREE.Material | null = null;
+  private depletedWoodMaterial: THREE.Material | null = null;
 
   // Yenilenme takibi [EK]
   private depletionCounter: number = 0;
@@ -64,103 +74,103 @@ export class ResourceNodes {
     const goldNodes = this.nodes.filter((n) => n.type === 'gold');
     const woodNodes = this.nodes.filter((n) => n.type === 'wood');
 
-    // Altın noktası: küçük sarı kutu yığını (SPEC S6)
+    // S10: Altın noktası - Koyu kaya, parlak altın damarları/külçeler ve kazma
     if (goldNodes.length > 0) {
-      const baseBox = new THREE.BoxGeometry(0.35, 0.22, 0.35);
-      baseBox.translate(0, 0.11, 0);
-      const topBox1 = new THREE.BoxGeometry(0.25, 0.18, 0.25);
-      topBox1.translate(-0.1, 0.28, 0.05);
-      const topBox2 = new THREE.BoxGeometry(0.2, 0.16, 0.2);
-      topBox2.translate(0.1, 0.27, -0.05);
-
-      this.goldGeometry = this.mergeGeometries([baseBox, topBox1, topBox2]);
-      this.goldMaterial = new THREE.MeshLambertMaterial({ color: 0xf59e0b });
+      this.goldGeometry = NatureModels.createGoldNodeGeometry();
+      this.goldMaterial = new THREE.MeshLambertMaterial({
+        color: PALETTE.goldVein,
+        emissive: PALETTE.goldEmissive,
+        emissiveIntensity: 0.22,
+      });
 
       this.goldInstancedMesh = new THREE.InstancedMesh(
         this.goldGeometry,
         this.goldMaterial,
         goldNodes.length
       );
+      this.goldInstancedMesh.castShadow = true;
+      this.goldInstancedMesh.receiveShadow = true;
       this.goldInstancedMesh.frustumCulled = false;
+
+      // S10: Tükenmiş altın kalıntısı (boş çukur ve kırık kaya)
+      this.depletedGoldGeometry = NatureModels.createDepletedGoldGeometry();
+      this.depletedGoldMaterial = new THREE.MeshLambertMaterial({
+        color: PALETTE.goldOre,
+      });
+      this.depletedGoldInstancedMesh = new THREE.InstancedMesh(
+        this.depletedGoldGeometry,
+        this.depletedGoldMaterial,
+        goldNodes.length
+      );
+      this.depletedGoldInstancedMesh.receiveShadow = true;
+      this.depletedGoldInstancedMesh.frustumCulled = false;
 
       const dummy = new THREE.Object3D();
       for (const node of goldNodes) {
-        dummy.position.set(node.tile.x + 0.5, 0.1, node.tile.y + 0.5);
+        dummy.position.set(node.tile.x + 0.5, 0.05, node.tile.y + 0.5);
         dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         this.goldInstancedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
+
+        // Başlangıçta kalıntı gizli
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        this.depletedGoldInstancedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
       }
       this.goldInstancedMesh.instanceMatrix.needsUpdate = true;
+      this.depletedGoldInstancedMesh.instanceMatrix.needsUpdate = true;
+
       this.group.add(this.goldInstancedMesh);
+      this.group.add(this.depletedGoldInstancedMesh);
     }
 
-    // Odun noktası: ağaç (SPEC S6 & R3 S2: işçilerden alçak/hafif küçük)
+    // S10: Odun noktası - Kesilmiş kütük yığını ve yanında iki ağaç
     if (woodNodes.length > 0) {
-      const trunk = new THREE.CylinderGeometry(0.10, 0.12, 0.3, 5);
-      trunk.translate(0, 0.15, 0);
-      const crown1 = new THREE.ConeGeometry(0.35, 0.55, 5);
-      crown1.translate(0, 0.55, 0);
-      const crown2 = new THREE.ConeGeometry(0.28, 0.45, 5);
-      crown2.translate(0, 0.85, 0);
-
-      this.woodGeometry = this.mergeGeometries([trunk, crown1, crown2]);
-      this.woodMaterial = new THREE.MeshLambertMaterial({ color: 0x16a34a });
+      this.woodGeometry = NatureModels.createWoodNodeGeometry();
+      this.woodMaterial = new THREE.MeshLambertMaterial({
+        color: PALETTE.woodLog,
+      });
 
       this.woodInstancedMesh = new THREE.InstancedMesh(
         this.woodGeometry,
         this.woodMaterial,
         woodNodes.length
       );
+      this.woodInstancedMesh.castShadow = true;
+      this.woodInstancedMesh.receiveShadow = true;
       this.woodInstancedMesh.frustumCulled = false;
+
+      // S10: Tükenmiş odun kalıntısı (kesilmiş ağaç kütükleri)
+      this.depletedWoodGeometry = NatureModels.createDepletedWoodGeometry();
+      this.depletedWoodMaterial = new THREE.MeshLambertMaterial({
+        color: PALETTE.woodBark,
+      });
+      this.depletedWoodInstancedMesh = new THREE.InstancedMesh(
+        this.depletedWoodGeometry,
+        this.depletedWoodMaterial,
+        woodNodes.length
+      );
+      this.depletedWoodInstancedMesh.receiveShadow = true;
+      this.depletedWoodInstancedMesh.frustumCulled = false;
 
       const dummy = new THREE.Object3D();
       for (const node of woodNodes) {
-        dummy.position.set(node.tile.x + 0.5, 0, node.tile.y + 0.5);
+        dummy.position.set(node.tile.x + 0.5, 0.05, node.tile.y + 0.5);
         dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         this.woodInstancedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
+
+        // Başlangıçta kalıntı gizli
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        this.depletedWoodInstancedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
       }
       this.woodInstancedMesh.instanceMatrix.needsUpdate = true;
+      this.depletedWoodInstancedMesh.instanceMatrix.needsUpdate = true;
+
       this.group.add(this.woodInstancedMesh);
+      this.group.add(this.depletedWoodInstancedMesh);
     }
-  }
-
-  private mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
-    let totalVertices = 0;
-    let totalNormals = 0;
-
-    for (const g of geos) {
-      totalVertices += g.attributes.position.array.length;
-      if (g.attributes.normal) {
-        totalNormals += g.attributes.normal.array.length;
-      }
-    }
-
-    const posArray = new Float32Array(totalVertices);
-    const normArray = new Float32Array(totalNormals);
-
-    let posOffset = 0;
-    let normOffset = 0;
-
-    for (const g of geos) {
-      const pos = g.attributes.position.array;
-      posArray.set(pos, posOffset);
-      posOffset += pos.length;
-
-      if (g.attributes.normal) {
-        const norm = g.attributes.normal.array;
-        normArray.set(norm, normOffset);
-        normOffset += norm.length;
-      }
-      g.dispose();
-    }
-
-    const merged = new THREE.BufferGeometry();
-    merged.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-    if (totalNormals > 0) {
-      merged.setAttribute('normal', new THREE.BufferAttribute(normArray, 3));
-    }
-    return merged;
   }
 
   // Fonksiyonlar: getNodes(team, type)
@@ -244,24 +254,38 @@ export class ResourceNodes {
     return actual;
   }
 
-  // Tükenen veya yeniden oluşan noktanın görsel durumunu güncelleme
+  // Tükenen veya yeniden oluşan noktanın görsel durumunu güncelleme (S10)
   private updateMeshVisibility(node: ResourceNode, visible: boolean): void {
-    const mesh =
-      node.type === 'gold' ? this.goldInstancedMesh : this.woodInstancedMesh;
-    if (!mesh) return;
+    const isGold = node.type === 'gold';
+    const activeMesh = isGold ? this.goldInstancedMesh : this.woodInstancedMesh;
+    const depletedMesh = isGold ? this.depletedGoldInstancedMesh : this.depletedWoodInstancedMesh;
+    if (!activeMesh || !depletedMesh) return;
 
     const dummy = new THREE.Object3D();
     if (visible) {
-      const yPos = node.type === 'gold' ? 0.1 : 0;
-      dummy.position.set(node.tile.x + 0.5, yPos, node.tile.y + 0.5);
+      // Aktif kaynak modeli görünür, tükenmiş kalıntı gizli
+      dummy.position.set(node.tile.x + 0.5, 0.05, node.tile.y + 0.5);
       dummy.scale.set(1, 1, 1);
-    } else {
-      dummy.position.set(node.tile.x + 0.5, -100, node.tile.y + 0.5);
+      dummy.updateMatrix();
+      activeMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
+
       dummy.scale.set(0, 0, 0);
+      dummy.updateMatrix();
+      depletedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
+    } else {
+      // S10: Tükenen nokta görünür bir kalıntıya dönüşür (altın: boş çukur/kaya; odun: kütük)
+      dummy.scale.set(0, 0, 0);
+      dummy.updateMatrix();
+      activeMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
+
+      dummy.position.set(node.tile.x + 0.5, 0.05, node.tile.y + 0.5);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      depletedMesh.setMatrixAt(node.instanceIndex, dummy.matrix);
     }
-    dummy.updateMatrix();
-    mesh.setMatrixAt(node.instanceIndex, dummy.matrix);
-    mesh.instanceMatrix.needsUpdate = true;
+
+    activeMesh.instanceMatrix.needsUpdate = true;
+    depletedMesh.instanceMatrix.needsUpdate = true;
   }
 
   // SPEC S6 Yenilenme [EK]:
@@ -319,8 +343,19 @@ export class ResourceNodes {
   public dispose(): void {
     if (this.goldGeometry) this.goldGeometry.dispose();
     if (this.woodGeometry) this.woodGeometry.dispose();
+    if (this.depletedGoldGeometry) this.depletedGoldGeometry.dispose();
+    if (this.depletedWoodGeometry) this.depletedWoodGeometry.dispose();
+
     if (this.goldMaterial) this.goldMaterial.dispose();
     if (this.woodMaterial) this.woodMaterial.dispose();
+    if (this.depletedGoldMaterial) this.depletedGoldMaterial.dispose();
+    if (this.depletedWoodMaterial) this.depletedWoodMaterial.dispose();
+
+    if (this.goldInstancedMesh) this.goldInstancedMesh.dispose();
+    if (this.woodInstancedMesh) this.woodInstancedMesh.dispose();
+    if (this.depletedGoldInstancedMesh) this.depletedGoldInstancedMesh.dispose();
+    if (this.depletedWoodInstancedMesh) this.depletedWoodInstancedMesh.dispose();
+
     this.group.clear();
   }
 }

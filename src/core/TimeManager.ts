@@ -1,11 +1,27 @@
+import { MATCH_RULES } from '../data/matchRules';
 import { EventManager } from './EventManager';
 
 export class TimeManager {
   public matchClockRealSec: number = 0;
   public simTimeSec: number = 0;
   public timeScale: number = 1;
+  public userSpeed: number = 1;
   public paused: boolean = false;
   public isMatchRunning: boolean = false;
+
+  public setUserSpeed(val: number): void {
+    if (MATCH_RULES.userSpeedOptions.includes(val)) {
+      this.userSpeed = val;
+    }
+  }
+
+  public getEffectiveTimeScale(): number {
+    return this.timeScale * this.userSpeed;
+  }
+
+  public isPaused(): boolean {
+    return this.paused;
+  }
 
   private visibilityListener: () => void;
 
@@ -39,6 +55,7 @@ export class TimeManager {
     this.matchClockRealSec = 0;
     this.simTimeSec = 0;
     this.timeScale = 1;
+    this.userSpeed = 1;
     this.paused = false;
     this.isMatchRunning = false;
   }

@@ -26,6 +26,7 @@ import { CurrencyManager } from '../progression/CurrencyManager';
 import { MarketManager } from '../progression/MarketManager';
 import { RewardManager } from '../progression/RewardManager';
 import { SaveManager } from '../progression/SaveManager';
+import { Effects } from '../render/Effects';
 import { CommanderId, DifficultyId, FactionId, MapId, MatchConfig, MatchStats } from '../types';
 import { CardPanel } from '../ui/CardPanel';
 import { GameOverScreen } from '../ui/GameOverScreen';
@@ -95,6 +96,7 @@ export class Game {
   private victoryConditions: VictoryConditions | null = null;
   private survivalMode: SurvivalMode | null = null;
   private rewardManager: RewardManager | null = null;
+  private effects: Effects | null = null;
 
   // Mevcut maç konfigürasyonu
   private currentConfig: MatchConfig | null = null;
@@ -353,7 +355,8 @@ export class Game {
       this.resourceManager,
       this.unitManager,
       this.modifierRegistry,
-      this.eventManager
+      this.eventManager,
+      this.buildingManager
     );
     this.workerManager.initStartWorkers();
 
@@ -641,6 +644,18 @@ export class Game {
     );
     this.registerGameSystem(this.worldLabels);
 
+    // R11E: Efektler sistemi
+    this.effects = new Effects(
+      this.sceneManager.getScene(),
+      this.eventManager,
+      this.timeManager,
+      this.unitManager,
+      this.buildingManager,
+      this.fogOfWar || undefined,
+      this.sceneManager.getQualityProfile()
+    );
+    this.registerGameSystem(this.effects);
+
     // 16. MatchPhaseManager.'prep' ve startMatchClock()
     this.matchPhaseManager.startMatch();
     this.startMatchClock();
@@ -673,7 +688,8 @@ export class Game {
       this.workerManager,
       this.cameraController,
       this.sceneManager,
-      this.canvas
+      this.canvas,
+      this.timeManager
     );
     this.minimap = new Minimap(
       this.uiLayer,
@@ -768,6 +784,10 @@ export class Game {
       this.sceneManager.getScene().remove(this.buildingManager.getGroup());
       this.buildingManager.dispose();
       this.buildingManager = null;
+    }
+    if (this.effects) {
+      this.effects.destroy();
+      this.effects = null;
     }
 
     // Mantıksal sistemler ve bonus temizliği

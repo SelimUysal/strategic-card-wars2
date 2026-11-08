@@ -5,6 +5,7 @@ import { CardManager } from '../cards/CardManager';
 import { DeckManager } from '../cards/DeckManager';
 import { CameraController } from '../core/CameraController';
 import { SceneManager } from '../core/SceneManager';
+import { TimeManager } from '../core/TimeManager';
 import { BUILDINGS } from '../data/buildings';
 import { CARDS } from '../data/cards';
 import { UNITS } from '../data/units';
@@ -109,7 +110,8 @@ export class CardPanel {
     private workerManager: WorkerManager,
     private cameraController: CameraController,
     private sceneManager: SceneManager,
-    private canvas: HTMLCanvasElement
+    private canvas: HTMLCanvasElement,
+    private timeManager: TimeManager
   ) {
     this.element = document.createElement('div');
     this.element.className = 'card-panel-container';
@@ -312,21 +314,13 @@ export class CardPanel {
     }
   }
 
-  // SPEC S6: Mevcut oyun hızı çarpanını HUD'dan güvenle okur (1x, 1,5x, 2x)
+  // SPEC S6: Etkin simülasyon zaman çarpanını döndürür
   private getCurrentTimeScale(): number {
-    const speedEl =
-      this.parent.querySelector<HTMLElement>('[data-field="speed"]') ||
-      document.querySelector<HTMLElement>('[data-field="speed"]');
-    if (speedEl) {
-      const text = speedEl.textContent?.trim();
-      if (text === '1,5x') return 1.5;
-      if (text === '2x') return 2;
-    }
-    return 1;
+    return this.timeManager ? this.timeManager.getEffectiveTimeScale() : 1;
   }
 
-  // SPEC S4: Kart üzerinde 1 saniyelik uyarı gösterimi ('Kuyruk dolu', 'Kaynak yetersiz')
-  public showWarning(cardId: CardId, text: 'Kuyruk dolu' | 'Kaynak yetersiz'): void {
+  // SPEC S4: Kart üzerinde uyarı gösterimi ('Kuyruk dolu', 'Kaynak yetersiz', 'Önce bina kur', vb.)
+  public showWarning(cardId: CardId, text: string, durationMs: number = 1500): void {
     const view = this.cardViews.get(cardId);
     if (!view) return;
 
@@ -339,7 +333,7 @@ export class CardPanel {
     view.toastTimer = window.setTimeout(() => {
       view.toastEl.classList.remove('visible');
       view.toastTimer = null;
-    }, 1000);
+    }, durationMs);
   }
 
   // SPEC S4: İşçi butonu üzerinde 1 saniyelik uyarı gösterimi
@@ -371,6 +365,7 @@ export class CardPanel {
     if (cardDef.category === 'asker') {
       const unitDef = UNITS[cardDef.refId as UnitId];
       const prodBuildingId = unitDef.producedAt as BuildingId;
+      const bDef = BUILDINGS[prodBuildingId];
       const playerBuildings = this.buildingManager.getBuildingsOfType('player', prodBuildingId);
       const activeBuilding = playerBuildings.find((b) => b.state === 'active');
       const constructingBuilding = playerBuildings.find((b) => b.state === 'constructing');
@@ -398,13 +393,10 @@ export class CardPanel {
           }
         }
         this.update();
-      } else if (!constructingBuilding) {
-        // Bina henüz kurulmamış ve tıklanmış: Kaynak yetersizse uyar
-        const bDef = BUILDINGS[prodBuildingId];
-        const canAfford = this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood);
-        if (!canAfford) {
-          this.showWarning(cardId, 'Kaynak yetersiz');
-        }
+      } else if (constructingBuilding) {
+        this.showWarning(cardId, 'Bina inşa ediliyor', 1500);
+      } else {
+        this.showWarning(cardId, `Önce ${bDef.nameTr} kurulmalı`, 1500);
       }
     } else {
       // Savunma kartı
@@ -645,7 +637,6 @@ export class CardPanel {
         if (!activeBuilding) {
           // Üretim binası henüz aktif değil
           const costStr = `${bDef.costGold} / ${bDef.costWood}`;
-          const canAfford = this.resourceManager.canAfford('player', bDef.costGold, bDef.costWood);
 
           if (constructingBuilding) {
             // SPEC S6: Bina inşa ediliyorsa 'İnşa ediliyor', ilerleme çubuğu ve 'Kalan: N sn'
@@ -666,12 +657,12 @@ export class CardPanel {
               costVal: costStr,
             });
           } else {
-            // Henüz yerleştirilmemiş
-            const isPassive = !isAvailable || !canAfford;
+            // Henüz yerleştirilmemiş: Sürekli küçük ipucu 'Önce bina kur (sürükle)'
+            const isPassive = !isAvailable;
             this.applyCardUpdates(view, {
               disabled: isPassive,
-              statusText: '',
-              statusVisible: false,
+              statusText: 'Önce bina kur (sürükle)',
+              statusVisible: true,
               queueBoxVisible: false,
               queueCountText: '',
               remainingText: '',

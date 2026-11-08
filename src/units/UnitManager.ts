@@ -8,6 +8,7 @@ import { Pathfinding } from '../world/Pathfinding';
 import { UnitOverlay } from '../ui/UnitOverlay';
 import { Unit } from './Unit';
 import { ModifierRegistry } from './UnitStats';
+import { UnitModels } from '../render/UnitModels';
 
 export class UnitManager {
   private units: Map<string, Unit> = new Map();
@@ -18,8 +19,11 @@ export class UnitManager {
   // Çizim grubu ve InstancedMesh koleksiyonları
   private group: THREE.Group;
   private instancedMeshes: Map<string, THREE.InstancedMesh> = new Map();
-  private playerMaterial: THREE.MeshStandardMaterial;
-  private enemyMaterial: THREE.MeshStandardMaterial;
+  private unitMaterial: THREE.MeshLambertMaterial;
+
+  // Takım renkleri (varsayılan: oyuncu mavi, düşman kırmızı)
+  private playerTeamHex: number = 0x2563eb;
+  private enemyTeamHex: number = 0xdc2626;
 
   // SPEC S2: Takım renginde yassı zemin diski (InstancedMesh)
   private playerDiskMesh!: THREE.InstancedMesh;
@@ -37,6 +41,10 @@ export class UnitManager {
   private dummyScale = new THREE.Vector3(1, 1, 1);
   private euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
+  // R11C A4: Hasar anında parlama ve normal renk nesneleri
+  private normalColor = new THREE.Color(1.0, 1.0, 1.0);
+  private flashColor = new THREE.Color(2.5, 2.5, 2.5);
+
   // SPEC S5: Yürünemez kareye itmeme kontrolü için Pathfinding referansı
   private pathfinding?: Pathfinding;
 
@@ -49,16 +57,10 @@ export class UnitManager {
     this.pathfinding = pathfinding;
     this.group = new THREE.Group();
 
-    // Takım materyalleri (varsayılan: oyuncu mavi, düşman kırmızı)
-    this.playerMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2563eb,
-      roughness: 0.4,
-      metalness: 0.2,
-    });
-    this.enemyMaterial = new THREE.MeshStandardMaterial({
-      color: 0xdc2626,
-      roughness: 0.4,
-      metalness: 0.2,
+    // R11C G6 & G3: Köşe renklerini düz gölgeleme ile çizen hafif lambert materyal
+    this.unitMaterial = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      flatShading: true,
     });
 
     this.initInstancedMeshes();
@@ -91,13 +93,45 @@ export class UnitManager {
 
   // Takım renklerini güncelleme fonksiyonu
   public setTeamColors(playerHex: number | string, enemyHex: number | string): void {
-    this.playerMaterial.color.set(playerHex as any);
-    this.enemyMaterial.color.set(enemyHex as any);
+    const pHex = typeof playerHex === 'string' ? parseInt(playerHex.replace('#', ''), 16) : playerHex;
+    const eHex = typeof enemyHex === 'string' ? parseInt(enemyHex.replace('#', ''), 16) : enemyHex;
+    this.playerTeamHex = pHex;
+    this.enemyTeamHex = eHex;
+
     if (this.playerDiskMaterial) {
-      this.playerDiskMaterial.color.set(playerHex as any);
+      this.playerDiskMaterial.color.set(pHex);
     }
     if (this.enemyDiskMaterial) {
-      this.enemyDiskMaterial.color.set(enemyHex as any);
+      this.enemyDiskMaterial.color.set(eHex);
+    }
+
+    this.rebuildUnitGeometries();
+  }
+
+  // R11C: Takım rengi değiştiğinde InstancedMesh geometrilerini yeni köşe renkleriyle yeniden üretir
+  private rebuildUnitGeometries(): void {
+    const unitIds: UnitId[] = [
+      'altin_madencisi',
+      'oduncu',
+      'tirendaz',
+      'yenicheri',
+      'deliler',
+      'sahi',
+      'zirhli_fil',
+      'fetih_gemisi',
+    ];
+    const teams: Team[] = ['player', 'enemy'];
+
+    for (const uid of unitIds) {
+      for (const team of teams) {
+        const hexColor = team === 'player' ? this.playerTeamHex : this.enemyTeamHex;
+        const key = `${uid}_${team}`;
+        const mesh = this.instancedMeshes.get(key);
+        if (mesh) {
+          mesh.geometry.dispose();
+          mesh.geometry = UnitModels.createUnitGeometry(uid, hexColor);
+        }
+      }
     }
   }
 
@@ -132,9 +166,14 @@ export class UnitManager {
   }
 
   // SPEC S3: removeUnit(unit)
-  public removeUnit(unit: Unit): void {
-    if (this.units.has(unit.id)) {
-      this.units.delete(unit.id);
+  public removeUnit(unit: Unit, force: boolean = false): void {
+    if (force || unit.deathTimer >= 0.8) {
+      if (this.units.has(unit.id)) {
+        this.units.delete(unit.id);
+      }
+    } else {
+      // R11C A5: Ölüm animasyonu (~0.8 sn) oynatılabilmesi için dead durumuna al
+      unit.state = 'dead';
     }
   }
 
@@ -175,9 +214,14 @@ export class UnitManager {
 
     // Birim mantığını güncelle
     for (const unit of this.units.values()) {
+      // R11C A4: Hasar parlama sayacını azalt
+      if (unit.damageFlashTimer > 0) {
+        unit.damageFlashTimer = Math.max(0, unit.damageFlashTimer - dt);
+      }
+
       if (unit.state === 'dead') {
         unit.deathTimer += dt;
-        if (unit.deathTimer >= 0.5) {
+        if (unit.deathTimer >= 0.8) {
           unitsToRemove.push(unit);
         }
         continue;
@@ -204,7 +248,7 @@ export class UnitManager {
 
     // Tamamen küçülüp ölen birimleri kaldır
     for (const u of unitsToRemove) {
-      this.removeUnit(u);
+      this.removeUnit(u, true);
     }
 
     // SPEC S5: Hafif ayrılma (soft separation) - aynı takımın idle/moving birimlerini ayırır
@@ -326,7 +370,7 @@ export class UnitManager {
     let enemyDiskCount = 0;
 
     for (const unit of this.units.values()) {
-      // SPEC S3: FogOfWar.canPlayerSee(unit) false ise çizilmez
+      // R11C A8: Yalnızca oyuncunun görüş alanında olan birimlerin dönüşümleri güncellenir
       if (this.fogOfWar && !this.fogOfWar.canPlayerSee(unit)) {
         continue;
       }
@@ -338,71 +382,139 @@ export class UnitManager {
       const idx = counts.get(key) || 0;
       if (idx >= this.MAX_INSTANCES_PER_TYPE) continue;
 
-      // Konum ve hafif zıplama animasyonu [EK]
-      let bounceY = 0;
-      if (unit.state === 'moving') {
-        bounceY = Math.abs(Math.sin(this.animTime * 12 + parseFloat(unit.id.slice(2)) || 0)) * 0.12;
-      }
-
-      // SPEC S1: Yükseklik tabanı (modele göre zemin üzerine tam oturtulur)
       const baseHeight = this.getUnitBaseHeight(unit.defId);
 
-      // Ölürken küçülme animasyonu [EK]
       let scale = 1.0;
-      if (unit.state === 'dead') {
-        scale = Math.max(0, 1.0 - unit.deathTimer / 0.5);
+      let scaleX = 1.0;
+      let scaleY = 1.0;
+      let scaleZ = 1.0;
+      let bounceY = 0;
+      let pitch = 0;
+      let roll = 0;
+      let lungeZ = 0;
+      let deathSink = 0;
+
+      // R11C A1: Boşta (idle) hafif nefes alma (scale ±%2, periyot ~2 sn)
+      if (unit.state === 'idle') {
+        const breath = 1.0 + 0.02 * Math.sin((this.animTime + unit.animPhase) * (Math.PI * 2 / 2.0));
+        scaleY = breath;
+        scaleX = 1.0 / Math.sqrt(breath);
+        scaleZ = 1.0 / Math.sqrt(breath);
       }
 
-      this.dummyPos.set(unit.pos.x, baseHeight * scale + bounceY, unit.pos.y);
+      // R11C A2: Yürüme (moving) adım sekmesi ve roll, Deliler dörtnal, Fil/Gemi ağır dalgalanma
+      if (unit.state === 'moving') {
+        const def = UNITS[unit.defId];
+        const speed = def ? def.moveSpeed : 1.5;
 
-      // Y ekseni yönelimi
-      this.euler.set(0, unit.rotationY, 0);
+        if (unit.defId === 'deliler') {
+          bounceY = Math.abs(Math.sin(this.animTime * 14 + unit.animPhase)) * 0.14;
+          pitch = Math.sin(this.animTime * 14 + unit.animPhase) * 0.08;
+          roll = Math.sin(this.animTime * 7 + unit.animPhase) * (3 * Math.PI / 180);
+        } else if (unit.defId === 'zirhli_fil' || unit.defId === 'fetih_gemisi') {
+          bounceY = Math.abs(Math.sin(this.animTime * 4.5 + unit.animPhase)) * 0.07;
+          pitch = Math.sin(this.animTime * 3.5 + unit.animPhase) * 0.04;
+          roll = Math.sin(this.animTime * 3.0 + unit.animPhase) * (2.5 * Math.PI / 180);
+        } else {
+          const stepFreq = speed * 4.5;
+          bounceY = Math.abs(Math.sin(this.animTime * stepFreq + unit.animPhase)) * 0.12;
+          roll = Math.sin(this.animTime * (stepFreq * 0.5) + unit.animPhase) * (3 * Math.PI / 180);
+        }
+      }
+
+      // R11C A3: Saldırı (attacking) lunge / yay germe / top namlusu geri tepmesi
+      if (unit.state === 'attacking') {
+        const strikePulse = Math.pow(Math.max(0, Math.sin(this.animTime * 5.5 + unit.animPhase)), 3);
+        if (unit.defId === 'tirendaz') {
+          pitch = -strikePulse * 0.22; // geriye doğru yay germe yatışı
+        } else if (unit.defId === 'sahi') {
+          lungeZ = -strikePulse * 0.25; // ateş anında sert geri tepme
+        } else {
+          lungeZ = strikePulse * 0.15; // yakın dövüş hedefe doğru ani atılma (lunge)
+        }
+      }
+
+      // R11C A6: İşçi toplama (gathering) kazma/balta sallama ritmi (pitch ±15°, 0.6 sn periyot)
+      if (unit.state === 'gathering') {
+        pitch = Math.sin((this.animTime + unit.animPhase) * (Math.PI * 2 / 0.6)) * (15 * Math.PI / 180);
+      }
+
+      // R11C A5: Ölüm devrilme (90° roll) + küçülme (~0.8 sn)
+      if (unit.state === 'dead') {
+        const deathProgress = Math.min(1.0, unit.deathTimer / 0.8);
+        scale = Math.max(0, 1.0 - deathProgress * 0.95);
+        roll += deathProgress * (Math.PI / 2);
+        deathSink = deathProgress * baseHeight * 0.7;
+      }
+
+      // R11C A4: Hasar alma anında 0.15 sn boyunca beyaz flaş
+      if (unit.damageFlashTimer > 0) {
+        mesh.setColorAt(idx, this.flashColor);
+      } else {
+        mesh.setColorAt(idx, this.normalColor);
+      }
+
+      // Konum hesabı (lungeZ yönelime göre X/Z'ye eklenir)
+      let posX = unit.pos.x;
+      let posZ = unit.pos.y;
+      if (lungeZ !== 0) {
+        posX += Math.sin(unit.rotationY) * lungeZ;
+        posZ += Math.cos(unit.rotationY) * lungeZ;
+      }
+
+      this.dummyPos.set(posX, baseHeight * scale + bounceY - deathSink, posZ);
+
+      // Yönelim (pitch, rotationY, roll)
+      this.euler.set(pitch, unit.rotationY, roll, 'YXZ');
       this.dummyQuat.setFromEuler(this.euler);
-      this.dummyScale.set(scale, scale, scale);
+      this.dummyScale.set(scale * scaleX, scale * scaleY, scale * scaleZ);
 
       this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
       mesh.setMatrixAt(idx, this.dummyMatrix);
       counts.set(key, idx + 1);
 
-      // SPEC S2: Takım renginde zemin halkası/diski çizimi
-      const isPlayer = unit.team === 'player';
-      const diskMesh = isPlayer ? this.playerDiskMesh : this.enemyDiskMesh;
-      const diskIdx = isPlayer ? playerDiskCount : enemyDiskCount;
+      // SPEC S2: Takım renginde zemin halkası/diski çizimi (ölü birimde gösterilmez)
+      if (unit.state !== 'dead') {
+        const isPlayer = unit.team === 'player';
+        const diskMesh = isPlayer ? this.playerDiskMesh : this.enemyDiskMesh;
+        const diskIdx = isPlayer ? playerDiskCount : enemyDiskCount;
 
-      if (diskIdx < this.MAX_INSTANCES_PER_TYPE * 8) {
-        // Zemin halkası konumu: y = 0.04 (zemin kaplamasının hemen üstü)
-        this.dummyPos.set(unit.pos.x, 0.04, unit.pos.y);
-        this.euler.set(0, 0, 0);
-        this.dummyQuat.setFromEuler(this.euler);
+        if (diskIdx < this.MAX_INSTANCES_PER_TYPE * 8) {
+          // Zemin halkası konumu: y = 0.04 (zemin kaplamasının hemen üstü)
+          this.dummyPos.set(unit.pos.x, 0.04, unit.pos.y);
+          this.euler.set(0, 0, 0);
+          this.dummyQuat.setFromEuler(this.euler);
 
-        // Birim türüne göre disk çapı ölçeği
-        const diskScaleMult =
-          unit.defId === 'zirhli_fil'
-            ? 1.55
-            : unit.defId === 'fetih_gemisi'
-            ? 1.8
-            : unit.defId === 'deliler'
-            ? 1.25
-            : unit.defId === 'sahi'
-            ? 1.3
-            : 1.0;
+          // Birim türüne göre disk çapı ölçeği
+          const diskScaleMult =
+            unit.defId === 'zirhli_fil'
+              ? 1.55
+              : unit.defId === 'fetih_gemisi'
+              ? 1.8
+              : unit.defId === 'deliler'
+              ? 1.25
+              : unit.defId === 'sahi'
+              ? 1.3
+              : 1.0;
 
-        const dScale = scale * diskScaleMult;
-        this.dummyScale.set(dScale, dScale, dScale);
-        this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
-        diskMesh.setMatrixAt(diskIdx, this.dummyMatrix);
+          const dScale = scale * diskScaleMult;
+          this.dummyScale.set(dScale, dScale, dScale);
+          this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
+          diskMesh.setMatrixAt(diskIdx, this.dummyMatrix);
 
-        if (isPlayer) playerDiskCount++;
-        else enemyDiskCount++;
+          if (isPlayer) playerDiskCount++;
+          else enemyDiskCount++;
+        }
       }
     }
 
-    // Görünmeyen örneklerin ölçeğini sıfırla ve sayaçları ayarla
+    // Sayaçları ve matris güncellemelerini işle
     for (const [key, count] of counts.entries()) {
       const mesh = this.instancedMeshes.get(key);
       if (mesh) {
         mesh.count = count;
         mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }
     }
 
@@ -431,14 +543,20 @@ export class UnitManager {
     const teams: Team[] = ['player', 'enemy'];
 
     for (const uid of unitIds) {
-      const geometry = this.createUnitGeometry(uid);
       for (const team of teams) {
-        const material = team === 'player' ? this.playerMaterial : this.enemyMaterial;
-        const mesh = new THREE.InstancedMesh(geometry, material, this.MAX_INSTANCES_PER_TYPE);
+        const hexColor = team === 'player' ? this.playerTeamHex : this.enemyTeamHex;
+        const geometry = UnitModels.createUnitGeometry(uid, hexColor);
+        const mesh = new THREE.InstancedMesh(geometry, this.unitMaterial, this.MAX_INSTANCES_PER_TYPE);
         mesh.count = 0;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
+
+        // R11C A4: Hasar anında beyaz flaş için instanceColor tamponu tahsis et
+        const colors = new Float32Array(this.MAX_INSTANCES_PER_TYPE * 3);
+        colors.fill(1.0);
+        mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
+
         const key = `${uid}_${team}`;
         this.instancedMeshes.set(key, mesh);
         this.group.add(mesh);
@@ -490,94 +608,9 @@ export class UnitManager {
     this.group.add(this.enemyDiskMesh);
   }
 
-  // SPEC S1: Birim taban yüksekliği (model merkezini zemine oturtmak için)
+  // R11C M9: Model taban yüksekliği UnitModels.getUnitBaseHeight ile okunur
   private getUnitBaseHeight(defId: UnitId): number {
-    switch (defId) {
-      case 'altin_madencisi':
-      case 'oduncu':
-        return 0.675; // Toplam boy 1.35
-      case 'tirendaz':
-        return 0.65; // Boy 1.30
-      case 'yenicheri':
-        return 0.675; // Boy 1.35
-      case 'deliler':
-        return 0.8; // Boy 1.60
-      case 'sahi':
-        return 0.45; // Boy ~0.9
-      case 'zirhli_fil':
-        return 0.9; // Boy 1.80
-      case 'fetih_gemisi':
-        return 0.95; // Boy 1.90
-      default:
-        return 0.65;
-    }
-  }
-
-  // SPEC S1: Büyütülmüş modeller (asker genişliği ~0.8, boy ~1.2-1.5, özel birimler daha büyük)
-  private createUnitGeometry(defId: UnitId): THREE.BufferGeometry {
-    switch (defId) {
-      case 'altin_madencisi':
-      case 'oduncu':
-        // İşçiler: genişlik 0.70, boy 1.35 kare kapsül
-        return new THREE.CapsuleGeometry(0.35, 0.65, 4, 8);
-
-      case 'tirendaz':
-        // Tirendaz: genişlik 0.80, boy 1.30 kare koni
-        return new THREE.ConeGeometry(0.4, 1.3, 8);
-
-      case 'yenicheri':
-        // Yeniçeri: genişlik 0.80, boy 1.35 kare kutu
-        return new THREE.BoxGeometry(0.8, 1.35, 0.8);
-
-      case 'deliler':
-        // Deliler: genişlik 0.85, boy 1.60, uzunluk 1.60 kare uzun süvari kutusu
-        return new THREE.BoxGeometry(0.85, 1.6, 1.6);
-
-      case 'sahi': {
-        // Şahi: genişlik 1.0, boy ~0.9, uzunluk 1.70 kare şasi ve devasa namlu
-        const carriage = new THREE.BoxGeometry(1.0, 0.5, 1.1);
-        const barrel = new THREE.CylinderGeometry(0.22, 0.3, 1.6, 8);
-        barrel.rotateX(Math.PI / 2);
-        barrel.translate(0, 0.4, 0.2);
-        return this.mergeBufferGeometries([carriage, barrel]);
-      }
-
-      case 'zirhli_fil':
-        // Zırhlı Fil: genişlik 1.30, boy 1.80, uzunluk 1.90 kare dev gövde
-        return new THREE.BoxGeometry(1.3, 1.8, 1.9);
-
-      case 'fetih_gemisi':
-        // Fetih Gemisi: genişlik 1.40, boy 1.90, uzunluk 2.60 kare devasa gövde
-        return new THREE.BoxGeometry(1.4, 1.9, 2.6);
-
-      default:
-        return new THREE.BoxGeometry(0.8, 1.3, 0.8);
-    }
-  }
-
-  // Harici kütüphane bağımlılığı olmadan iki BufferGeometry'yi birleştiren yardımcı fonksiyon
-  private mergeBufferGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
-    let totalPositions = 0;
-    const nonIndexedList: THREE.BufferGeometry[] = [];
-
-    for (const g of geos) {
-      const nonIndexed = g.index ? g.toNonIndexed() : g.clone();
-      nonIndexedList.push(nonIndexed);
-      totalPositions += nonIndexed.attributes.position.array.length;
-    }
-
-    const mergedPositions = new Float32Array(totalPositions);
-    let offset = 0;
-
-    for (const g of nonIndexedList) {
-      mergedPositions.set(g.attributes.position.array, offset);
-      offset += g.attributes.position.array.length;
-    }
-
-    const merged = new THREE.BufferGeometry();
-    merged.setAttribute('position', new THREE.BufferAttribute(mergedPositions, 3));
-    merged.computeVertexNormals();
-    return merged;
+    return UnitModels.getUnitBaseHeight(defId);
   }
 
   public getGroup(): THREE.Group {
@@ -591,8 +624,7 @@ export class UnitManager {
     if (this.diskGeometry) this.diskGeometry.dispose();
     if (this.playerDiskMaterial) this.playerDiskMaterial.dispose();
     if (this.enemyDiskMaterial) this.enemyDiskMaterial.dispose();
-    this.playerMaterial.dispose();
-    this.enemyMaterial.dispose();
+    this.unitMaterial.dispose();
     this.group.clear();
     this.units.clear();
   }

@@ -3,6 +3,7 @@ import { BuildingManager } from '../buildings/BuildingManager';
 import { CommanderManager } from '../commanders/CommanderManager';
 import { FactionDef } from '../types';
 import { FogOfWar } from '../world/FogOfWar';
+import { BuildingModels } from '../render/BuildingModels';
 
 export class WorldLabels {
   private group: THREE.Group;
@@ -59,10 +60,12 @@ export class WorldLabels {
   public update(): void {
     // 1. Oyuncu Karargâh Etiketi
     const playerHq = this.buildingManager.getHq('player');
+    const hqHeight = BuildingModels.buildingModelHeight('hq') + 0.6;
+
     if (playerHq && playerHq.state !== 'destroyed' && this.playerSprite) {
       this.playerSprite.visible = true;
       const center = playerHq.getCenter();
-      this.playerSprite.position.set(center.x, 4.5, center.y);
+      this.playerSprite.position.set(center.x, hqHeight, center.y);
 
       const line1 = this.playerFaction.nameTr;
       const cmdDef = this.commanderManager.getCommanderDef('player');
@@ -82,7 +85,7 @@ export class WorldLabels {
     ) {
       this.enemySprite.visible = true;
       const center = enemyHq.getCenter();
-      this.enemySprite.position.set(center.x, 4.5, center.y);
+      this.enemySprite.position.set(center.x, hqHeight, center.y);
 
       const line1 = this.enemyFaction.nameTr;
       let line2: string | undefined = undefined;

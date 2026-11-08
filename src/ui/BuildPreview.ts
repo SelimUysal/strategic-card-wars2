@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { BuildingManager } from '../buildings/BuildingManager';
 import { BuildingPlacementValidity, ConstructionManager } from '../buildings/ConstructionManager';
+import { BuildingModels } from '../render/BuildingModels';
 import { BUILDINGS } from '../data/buildings';
 import { MATCH_RULES } from '../data/matchRules';
 import { BuildingId, TilePos } from '../types';
@@ -128,7 +128,7 @@ export class BuildPreview {
     if (this.ghostModelGroup) {
       this.previewGroup.remove(this.ghostModelGroup);
     }
-    this.ghostModelGroup = BuildingManager.createBuildingVisualModel(
+    this.ghostModelGroup = BuildingModels.createBuildingVisualModel(
       buildingId,
       this.ghostMatValid
     );

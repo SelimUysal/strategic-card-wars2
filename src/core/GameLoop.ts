@@ -76,15 +76,15 @@ export class GameLoop {
     // Aşırı büyük sıçramaları sınırlama
     const realDt = Math.min(Math.max(0, rawDeltaSec), this.maxRealDt);
 
-    // Maç saati: yalnızca maç çalışırken ve duraklatılmamışken realDt kadar artar
+    // Maç saati: yalnızca maç çalışırken ve duraklatılmamışken realDt * userSpeed kadar artar
     if (this.timeManager.isMatchRunning && !this.timeManager.paused) {
-      this.timeManager.matchClockRealSec += realDt;
+      this.timeManager.matchClockRealSec += realDt * this.timeManager.userSpeed;
       this.matchPhaseManager.update();
     }
 
-    // Sabit zaman adımlı simülasyon
+    // Sabit zaman adımlı simülasyon (etkin simülasyon çarpanı ile)
     if (!this.timeManager.paused) {
-      this.accumulator += realDt * this.timeManager.timeScale;
+      this.accumulator += realDt * this.timeManager.getEffectiveTimeScale();
       let stepCount = 0;
 
       while (

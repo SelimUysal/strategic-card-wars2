@@ -2,6 +2,7 @@ import { BuildingManager } from '../buildings/BuildingManager';
 import { CommanderManager } from '../commanders/CommanderManager';
 import { MatchPhaseManager } from '../core/MatchPhaseManager';
 import { TimeManager } from '../core/TimeManager';
+import { MATCH_RULES } from '../data/matchRules';
 import { REWARDS } from '../data/rewards';
 import { RewardManager } from '../progression/RewardManager';
 import { DifficultyId, FactionDef } from '../types';
@@ -10,8 +11,11 @@ export class HUD {
   private element: HTMLElement;
   private hqHpTextEl: HTMLElement;
   private hqHpBarFillEl: HTMLElement;
+  private enemyHqTextEl: HTMLElement;
+  private enemyHqHpBarFillEl: HTMLElement;
   private timeEl: HTMLElement;
   private speedEl: HTMLElement;
+  private speedBtn: HTMLButtonElement;
   private phaseEl: HTMLElement;
   private commandersEl: HTMLElement | null = null;
   private playerCommanderEl: HTMLElement | null = null;
@@ -43,6 +47,12 @@ export class HUD {
           <div class="hud-hp-bar-fill" data-field="hq-fill"></div>
         </div>
         <div class="hud-hp-bar-text" data-field="hq-text">0 / 0</div>
+
+        <div class="hud-hq-title" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px;">Düşman Ana Karargâh</div>
+        <div class="hud-hp-bar-bg">
+          <div class="hud-hp-bar-fill" data-field="enemy-hq-fill"></div>
+        </div>
+        <div class="hud-hp-bar-text" data-field="enemy-hq-text">???</div>
       </div>
 
       <div class="hud-top-right-panel">
@@ -67,6 +77,7 @@ export class HUD {
         `
         }
         <div class="hud-actions">
+          <button type="button" class="hud-btn" data-action="user-speed">Hızlandır: 1x</button>
           <button type="button" class="hud-btn" data-action="pause-resume">Duraklat</button>
           <button type="button" class="hud-btn hud-btn-exit" data-action="exit">Çık</button>
         </div>
@@ -75,8 +86,11 @@ export class HUD {
 
     this.hqHpTextEl = this.element.querySelector('[data-field="hq-text"]') as HTMLElement;
     this.hqHpBarFillEl = this.element.querySelector('[data-field="hq-fill"]') as HTMLElement;
+    this.enemyHqTextEl = this.element.querySelector('[data-field="enemy-hq-text"]') as HTMLElement;
+    this.enemyHqHpBarFillEl = this.element.querySelector('[data-field="enemy-hq-fill"]') as HTMLElement;
     this.timeEl = this.element.querySelector('[data-field="time"]') as HTMLElement;
     this.speedEl = this.element.querySelector('[data-field="speed"]') as HTMLElement;
+    this.speedBtn = this.element.querySelector('[data-action="user-speed"]') as HTMLButtonElement;
     this.phaseEl = this.element.querySelector('[data-field="phase"]') as HTMLElement;
     this.pauseResumeBtn = this.element.querySelector('[data-action="pause-resume"]') as HTMLButtonElement;
 
@@ -85,6 +99,16 @@ export class HUD {
       this.playerCommanderEl = this.element.querySelector('[data-field="player-cmd"]');
       this.enemyCommanderEl = this.element.querySelector('[data-field="enemy-cmd"]');
     }
+
+    this.speedBtn.addEventListener('click', () => {
+      const options = MATCH_RULES.userSpeedOptions;
+      const curr = this.timeManager.userSpeed;
+      const idx = options.indexOf(curr);
+      const nextVal = options[(idx + 1) % options.length];
+      this.timeManager.setUserSpeed(nextVal);
+      this.speedBtn.textContent = `Hızlandır: ${this.timeManager.userSpeed}x`;
+      this.update();
+    });
 
     this.pauseResumeBtn.addEventListener('click', () => {
       if (this.timeManager.paused) {
@@ -123,6 +147,26 @@ export class HUD {
       this.hqHpBarFillEl.style.width = '0%';
     }
 
+    // 1b. Düşman Ana Karargâh can çubuğu
+    const enemyHq = this.buildingManager.getHq('enemy');
+    const canSeeEnemy = this.commanderManager.isEnemyCommanderRevealed();
+    if (canSeeEnemy && enemyHq && enemyHq.state !== 'destroyed') {
+      const currentHp = Math.max(0, Math.round(enemyHq.hp));
+      const maxHp = enemyHq.maxHp;
+      this.enemyHqTextEl.textContent = `${currentHp} / ${maxHp}`;
+      const pct = Math.max(0, Math.min(100, (currentHp / maxHp) * 100));
+      this.enemyHqHpBarFillEl.style.width = `${pct}%`;
+    } else if (enemyHq && enemyHq.state === 'destroyed') {
+      this.enemyHqTextEl.textContent = '0 / 0';
+      this.enemyHqHpBarFillEl.style.width = '0%';
+    } else if (canSeeEnemy && !enemyHq) {
+      this.enemyHqTextEl.textContent = '0 / 0';
+      this.enemyHqHpBarFillEl.style.width = '0%';
+    } else {
+      this.enemyHqTextEl.textContent = '???';
+      this.enemyHqHpBarFillEl.style.width = '0%';
+    }
+
     // 2. Süre (mm:ss, maç saati)
     const totalSec = Math.floor(this.timeManager.matchClockRealSec);
     const minutes = Math.floor(totalSec / 60);
@@ -131,14 +175,11 @@ export class HUD {
     const ss = seconds.toString().padStart(2, '0');
     this.timeEl.textContent = `${mm}:${ss}`;
 
-    // 3. Oyun hızı etiketi ('1x', '1,5x', '2x')
-    let speedLabel = '1x';
-    if (this.timeManager.timeScale === 1.5) {
-      speedLabel = '1,5x';
-    } else if (this.timeManager.timeScale === 2) {
-      speedLabel = '2x';
-    }
-    this.speedEl.textContent = speedLabel;
+    // 3. Oyun hızı etiketi (ETKİN simülasyon hızını gösterir: faz x oyuncu hızı)
+    const effectiveScale = this.timeManager.getEffectiveTimeScale();
+    const formattedScale = effectiveScale.toString().replace('.', ',');
+    this.speedEl.textContent = `${formattedScale}x`;
+    this.speedBtn.textContent = `Hızlandır: ${this.timeManager.userSpeed}x`;
 
     // 4. Faz etiketi ('Hazırlanma', 'Savaş başlıyor', 'Savaş başladı')
     const phase = this.matchPhaseManager.getPhase();

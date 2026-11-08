@@ -1,5 +1,6 @@
 export const MATCH_RULES = {
   fixedStepSec: 1 / 30,
+  userSpeedOptions: [1, 2, 3],
   phases: [
     { id: 'prep', fromRealSec: 0, timeScale: 1 },
     { id: 'march', fromRealSec: 240, timeScale: 1.5 },
@@ -26,4 +27,9 @@ export const MATCH_RULES = {
   cameraZoomLevelCount: 3,
   unitSeparationRadius: 0.9,
   rallySlotSpacing: 1.2,
+  armyGap: 8,
+  armyArcherDepth: 3,
+  armyArtilleryDepth: 5,
+  armyMaxColumns: 12,
+  workerCarryCapacity: 30,
 };

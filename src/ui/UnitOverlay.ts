@@ -4,6 +4,7 @@ import { UNITS } from '../data/units';
 import { Team, UnitId } from '../types';
 import { Unit } from '../units/Unit';
 import { FogOfWar } from '../world/FogOfWar';
+import { UnitModels } from '../render/UnitModels';
 
 export class UnitOverlay {
   private group: THREE.Group;
@@ -169,7 +170,7 @@ export class UnitOverlay {
   // 16 hücreli tek doku atlasını oluşturan canvas 2D çizimi (1024 x 256 piksel)
   private createTextureAtlas(): HTMLCanvasElement {
     const atlas = document.createElement('canvas');
-    atlas.width = 1024;
+    atlas.width = 1280;
     atlas.height = 256;
     const ctx = atlas.getContext('2d')!;
 
@@ -200,7 +201,57 @@ export class UnitOverlay {
       this.cacheSingleBadgeUrl(atlas, c, 1, `${uid}_enemy`);
     }
 
+    // S6: Taşıma göstergeleri (Sütun 8 = Altın sarısı kutu, Sütun 9 = Odun kütüğü)
+    UnitOverlay.drawCarryIcon(ctx, 8 * tileSize + tileSize / 2, tileSize, 56, 'gold');
+    UnitOverlay.drawCarryIcon(ctx, 9 * tileSize + tileSize / 2, tileSize, 56, 'wood');
+
     return atlas;
+  }
+
+  private static drawCarryIcon(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    r: number,
+    type: 'gold' | 'wood'
+  ): void {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'gold' ? '#eab308' : '#78350f';
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#0f172a';
+    ctx.stroke();
+
+    if (type === 'gold') {
+      ctx.fillStyle = '#fef08a';
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.rect(cx - 20, cy - 14, 40, 28);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.strokeStyle = '#b45309';
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#d97706';
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.rect(cx - 24, cy - 12, 48, 24);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.ellipse(cx - 14, cy, 4, 9, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + 14, cy, 4, 9, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private cacheSingleBadgeUrl(
@@ -495,7 +546,7 @@ export class UnitOverlay {
     ctx.restore();
   }
 
-  // Atlas UV koordinatlarını kullanarak 16 badge InstancedMesh nesnesi oluşturur
+  // Atlas UV koordinatlarını kullanarak badge InstancedMesh nesneleri oluşturur
   private initBadgeMeshes(): void {
     const teams: Team[] = ['player', 'enemy'];
 
@@ -506,10 +557,8 @@ export class UnitOverlay {
         const team = teams[r];
         const key = `${uid}_${team}`;
 
-        // UV hesaplama: 8 sütun x 2 satır
-        const uMin = c / 8;
-        const uMax = (c + 1) / 8;
-        // Canvas Y=0 üst satır (player), Y=128 alt satır (enemy)
+        const uMin = c / 10;
+        const uMax = (c + 1) / 10;
         const vMax = r === 0 ? 1.0 : 0.5;
         const vMin = r === 0 ? 0.5 : 0.0;
 
@@ -517,7 +566,6 @@ export class UnitOverlay {
         const uvAttr = geom.attributes.uv;
         const uvArray = uvAttr.array as Float32Array;
 
-        // PlaneGeometry köşe UV sırası: top-left, top-right, bot-left, bot-right
         uvArray[0] = uMin; uvArray[1] = vMax;
         uvArray[2] = uMax; uvArray[3] = vMax;
         uvArray[4] = uMin; uvArray[5] = vMin;
@@ -535,29 +583,44 @@ export class UnitOverlay {
         this.badgeMeshes.set(key, mesh);
       }
     }
+
+    // S6: Taşıma rozeti meshleri (Altın = Col 8, Odun = Col 9)
+    const carryConfigs: Array<{ key: string; col: number }> = [
+      { key: 'carry_gold', col: 8 },
+      { key: 'carry_wood', col: 9 },
+    ];
+
+    for (const cfg of carryConfigs) {
+      const uMin = cfg.col / 10;
+      const uMax = (cfg.col + 1) / 10;
+      const vMin = 0.0;
+      const vMax = 1.0;
+
+      const geom = new THREE.PlaneGeometry(0.42, 0.42);
+      const uvAttr = geom.attributes.uv;
+      const uvArray = uvAttr.array as Float32Array;
+
+      uvArray[0] = uMin; uvArray[1] = vMax;
+      uvArray[2] = uMax; uvArray[3] = vMax;
+      uvArray[4] = uMin; uvArray[5] = vMin;
+      uvArray[6] = uMax; uvArray[7] = vMin;
+      uvAttr.needsUpdate = true;
+
+      this.badgeGeoms.push(geom);
+
+      const mesh = new THREE.InstancedMesh(geom, this.atlasMaterial, this.MAX_INSTANCES);
+      mesh.renderOrder = 1004;
+      mesh.frustumCulled = false;
+      mesh.count = 0;
+      this.group.add(mesh);
+
+      this.badgeMeshes.set(cfg.key, mesh);
+    }
   }
 
-  // Model yükseklik tablosu
+  // R11C M9: Model yükseklik tablosu UnitModels.modelHeight ile okunur
   private getUnitTopHeight(defId: UnitId): number {
-    switch (defId) {
-      case 'altin_madencisi':
-      case 'oduncu':
-        return 1.35;
-      case 'tirendaz':
-        return 1.30;
-      case 'yenicheri':
-        return 1.35;
-      case 'deliler':
-        return 1.60;
-      case 'sahi':
-        return 0.90;
-      case 'zirhli_fil':
-        return 1.80;
-      case 'fetih_gemisi':
-        return 1.90;
-      default:
-        return 1.30;
-    }
+    return UnitModels.modelHeight(defId);
   }
 
   // SPEC S1 & S3: Her karede konum ve doluluk güncellemesi
@@ -653,6 +716,26 @@ export class UnitOverlay {
           badgeMesh.setMatrixAt(bIdx, this.dummyMatrix);
 
           badgeCounts.set(badgeKey, bIdx + 1);
+        }
+      }
+
+      // SPEC S6: Yük taşıyan işçinin üstünde taşıdığı kaynak simgesi rozeti (Altın = Sarı kutu, Odun = Kütük)
+      if (unit.carriedAmount > 0 && unit.carriedType) {
+        const carryKey = unit.carriedType === 'gold' ? 'carry_gold' : 'carry_wood';
+        const carryMesh = this.badgeMeshes.get(carryKey);
+        if (carryMesh) {
+          const cIdx = badgeCounts.get(carryKey) || 0;
+          if (cIdx < this.MAX_INSTANCES) {
+            const carryOffset = showBar ? 0.54 * baseScale : 0.44 * baseScale;
+            const carryPos = barCenter.clone().addScaledVector(this.screenUp, carryOffset);
+
+            this.dummyPos.copy(carryPos);
+            this.dummyScale.set(baseScale * 0.85, baseScale * 0.85, 1);
+            this.dummyMatrix.compose(this.dummyPos, this.dummyQuat, this.dummyScale);
+            carryMesh.setMatrixAt(cIdx, this.dummyMatrix);
+
+            badgeCounts.set(carryKey, cIdx + 1);
+          }
         }
       }
     }

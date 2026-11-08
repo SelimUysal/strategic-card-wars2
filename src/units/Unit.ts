@@ -2,6 +2,7 @@ import { Team, TilePos, UnitId } from '../types';
 
 export type UnitState = 'idle' | 'moving' | 'attacking' | 'gathering' | 'dead';
 export type UnitMode = 'waiting' | 'attack';
+export type WorkerDeliveryState = 'toNode' | 'gathering' | 'returning' | 'depositing';
 
 export class Unit {
   public readonly kind: 'unit' = 'unit';
@@ -18,9 +19,17 @@ export class Unit {
   public attackCooldown: number;
   public mode: UnitMode;
 
+  // SPEC S8: İşçi taşıma alanları ve durumları
+  public carriedType: 'gold' | 'wood' | null = null;
+  public carriedAmount: number = 0;
+  public workerState: WorkerDeliveryState = 'toNode';
+
   // Çizim ve yönelim için ek durum
   public rotationY: number = 0;
   public deathTimer: number = 0; // Ölürken küçülme animasyonu için
+  public animPhase: number = Math.random() * Math.PI * 2; // R11C A7: Eşzamansız animasyon fazı
+  public damageFlashTimer: number = 0; // R11C A4: Hasar parlama sayacı
+  public attackAnimTimer: number = 0; // R11C A3: Saldırı animasyonu sayacı
 
   constructor(params: {
     id: string;
@@ -113,6 +122,7 @@ export class Unit {
 
     this.hp = Math.max(0, this.hp - amount);
     this.lastAttackerId = sourceId;
+    this.damageFlashTimer = 0.15; // R11C A4: Hasar parlama süresi
 
     if (this.hp <= 0) {
       this.state = 'dead';
