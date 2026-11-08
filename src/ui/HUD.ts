@@ -61,15 +61,22 @@ export class HUD {
           isCehennem
             ? ''
             : `
-        <div class="hud-commanders" data-field="commanders">
-          <span>Komutan: <span data-field="player-cmd">-</span></span>
-          <span>vs</span>
-          <span class="hud-enemy-team">
-            <span class="hud-team-color-dot" style="background-color: ${this.enemyFaction.colorHex}"></span>
-            <span>${this.enemyFaction.nameTr}:</span>
-            <span data-field="enemy-cmd">???</span>
-          </span>
-        </div>
+          <div class="hud-commanders" data-field="commanders">
+
+            <div class="hud-player-team">
+              <span>Komutan:</span>
+              <span data-field="player-cmd">-</span>
+            </div>
+
+            <span class="hud-vs">VS</span>
+
+            <div class="hud-enemy-team">
+              <span class="hud-team-color-dot" style="background-color: ${this.enemyFaction.colorHex}"></span>
+              <span>${this.enemyFaction.nameTr}:</span>
+              <span data-field="enemy-cmd">???</span>
+            </div>
+
+          </div>
         `
         }
         <div class="hud-actions">
