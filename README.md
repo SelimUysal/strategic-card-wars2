@@ -138,16 +138,6 @@ Tarayıcı adres çubuğuna `?test=1` parametresi eklendiğinde (örn: `http://l
 
 Oyun dinamik ses ve müzik yöneticisine (`AudioManager`) sahiptir. Ses dosyaları `public/audio/` klasörüne yerleştirilmelidir. Eksik ses dosyaları durumunda oyun sessiz modda hatasız çalışmaya devam eder.
 
-| Dosya Adı | Tür | Açıklama |
-| :--- | :--- | :--- |
-| `muzik_menu.mp3` | Müzik | Ana Menü, Hazırlık ve Market müzikleri |
-| `muzik_hazirlik.mp3` | Müzik | Maç başı (00:00 - 04:00) hazırlık müziği |
-| `muzik_sefer_marsi.mp3` | Müzik | Maç 04:00 Sefer evresi marşı |
-| `muzik_savas.mp3` | Müzik | Maç 05:00 Savaş evresi müziği |
-| `sfx_ok.mp3` | Efekt | Okçu ve Hisar ok atış sesleri |
-| `sfx_top.mp3` | Efekt | Şahi ve Fetih Gemisi top atışları |
-| `sfx_kilic.mp3` | Efekt | Yakın dövüş vuruş sesleri |
-
 *Öneri Format*: MP3 (44,1 kHz, 128 kbps), optimize edilmiş dosya boyutları.
 
 ---
