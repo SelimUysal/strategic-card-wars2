@@ -81,7 +81,7 @@ export class PhaseBanner {
         this.currentShownPhase = 'march';
         this.titleEl.textContent = `Oyun hızı ${marchScaleStr}x oldu, kaynak toplama hızlandı. Askerler sefere hazırlanıyor.`;
         this.subEl.textContent = '';
-        this.element.classList.add('visible');
+        this.element.classList.add('visible', 'speed-message');
       }
     } else if (clock >= warStart) {
       // 05:00 (300s) ve sonrasında 'HARP BAŞLADI!' (ilk 6 saniye)
