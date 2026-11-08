@@ -6,6 +6,15 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
+<div align="center">
+
+# 🎮 OYUNU OYNA
+
+### 👇 Oyuna gitmek için tıkla
+
+[🚀 https://strategic-card-wars2.netlify.app/](https://strategic-card-wars2.netlify.app/)
+
+</div>
 
 ## 📜 İçindekiler
 1. [Oyun Tanıtımı](#-oyun-tanıtımı)
